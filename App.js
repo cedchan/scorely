@@ -29,7 +29,7 @@ export default function App() {
         <Stack.Screen
           name="Upload"
           component={UploadScreen}
-          options={{ title: 'Upload Sheet Music' }}
+          options={{ headerShown: false }}
         />
         <Stack.Screen
           name="Player"

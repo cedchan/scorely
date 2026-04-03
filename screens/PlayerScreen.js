@@ -30,6 +30,17 @@ const COLORS = {
   darkBrown: '#58392F',
 };
 
+const getFallbackApiBaseUrl = () => {
+  if (Platform.OS === 'web') {
+    if (typeof window !== 'undefined' && window.location?.hostname) {
+      const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
+      return `${protocol}//${window.location.hostname}:8000`;
+    }
+  }
+
+  return 'http://localhost:8000';
+};
+
 export default function PlayerScreen({ route }) {
   const { width, height } = useWindowDimensions();
   const scrollViewRef = useRef(null);
@@ -51,13 +62,15 @@ export default function PlayerScreen({ route }) {
   const [annotations, setAnnotations] = useState([]);
   const [annotationsEnabled, setAnnotationsEnabled] = useState(false);
   const [currentTool, setCurrentTool] = useState('pen');
-  const [currentColor, setCurrentColor] = useState('#58392F');
+  const [currentColor, setCurrentColor] = useState('#D94848');
   const [currentStrokeWidth, setCurrentStrokeWidth] = useState(4);
-  const [userId] = useState(() => annotationSyncService.generateUserId());
+  const [userId] = useState(
+    () => `user-${Math.random().toString(36).slice(2, 11)}`
+  );
 
-  const apiBaseUrl = route.params?.apiBaseUrl || 'http://localhost:8000';
-  const pageManifestPath = route.params?.pageManifestPath;
   const jobId = route.params?.jobId;
+  const apiBaseUrl = route.params?.apiBaseUrl || getFallbackApiBaseUrl();
+  const pageManifestPath = route.params?.pageManifestPath || (jobId ? `/api/score-pages/${jobId}` : null);
   const cacheToken = jobId || route.params?.fileName || 'score';
   const isTabletLayout = width >= 900;
   const pageHorizontalPadding = isTabletLayout ? 56 : 20;

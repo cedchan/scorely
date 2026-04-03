@@ -15,7 +15,6 @@ const COLORS = {
 };
 
 const ANNOTATION_COLORS = [
-  { name: 'Dark Brown', value: '#58392F' },
   { name: 'Red', value: '#D94848' },
   { name: 'Blue', value: '#4A8FD9' },
   { name: 'Green', value: '#48A848' },

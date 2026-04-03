@@ -1,29 +1,77 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
   Alert,
   Platform,
+  SafeAreaView,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { useFonts, Afacad_400Regular } from '@expo-google-fonts/afacad';
 import Constants from 'expo-constants';
 import { FontAwesomeIcon } from '@fortawesome/react-native-fontawesome';
-import {
-  faCheckCircle,
-  faClock,
-  faFileMusic,
-  faUpload,
-} from '@fortawesome/free-solid-svg-icons';
+import { faCheckCircle, faClock, faFileMusic, faUpload } from '@fortawesome/free-solid-svg-icons';
 import * as DocumentPicker from 'expo-document-picker';
 
 const COLORS = {
-  beige: '#FAF7F0',
-  lightBrown: '#A9988F',
-  darkBrown: '#58392F',
+  background: '#F7F1E8',
+  card: '#FFFDF8',
+  stroke: '#E3D5C2',
+  muted: '#A9988F',
+  primary: '#58392F',
+  accent: '#D8DCC8',
+  accentSoft: '#F3F4EC',
+  success: '#4E8B62',
+  paperShadow: 'rgba(88, 57, 47, 0.08)',
 };
+
+const DEFAULT_PROJECTS = [
+  {
+    id: 'project-upload',
+    title: 'Upload New Piece',
+    icon: faUpload,
+    subtitle: null,
+    tone: 'neutral',
+    action: 'upload',
+  },
+  {
+    id: 'project-empty-1',
+    title: 'Untitled Score',
+    subtitle: null,
+    icon: faFileMusic,
+    tone: 'neutral',
+    action: 'placeholder',
+  },
+  {
+    id: 'project-empty-2',
+    title: 'Untitled Score',
+    subtitle: null,
+    icon: faFileMusic,
+    tone: 'neutral',
+    action: 'placeholder',
+  },
+  {
+    id: 'project-empty-3',
+    title: 'Untitled Score',
+    subtitle: null,
+    icon: faFileMusic,
+    tone: 'neutral',
+    action: 'placeholder',
+  },
+  {
+    id: 'project-empty-4',
+    title: 'Untitled Score',
+    subtitle: null,
+    icon: faFileMusic,
+    tone: 'neutral',
+    action: 'placeholder',
+  },
+];
 
 const getApiBaseUrl = () => {
   if (Platform.OS === 'android') {
@@ -31,6 +79,10 @@ const getApiBaseUrl = () => {
   }
 
   if (Platform.OS === 'web') {
+    if (typeof window !== 'undefined' && window.location?.hostname) {
+      const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
+      return `${protocol}//${window.location.hostname}:8000`;
+    }
     return 'http://localhost:8000';
   }
 
@@ -48,14 +100,17 @@ const getApiBaseUrl = () => {
 };
 
 export default function UploadScreen({ navigation }) {
+  const { width, height } = useWindowDimensions();
   const apiBaseUrl = getApiBaseUrl();
   const [selectedFile, setSelectedFile] = useState(null);
-  const [statusText, setStatusText] = useState('Pick a PDF to start transcription.');
+  const [statusText, setStatusText] = useState('Choose a piece to start transcription.');
   const [isLoading, setIsLoading] = useState(false);
   const [jobId, setJobId] = useState(null);
+  const [latestProject, setLatestProject] = useState(null);
   const pollTimerRef = useRef(null);
+  const scrollX = useRef(new Animated.Value(0)).current;
 
-  let [fontsLoaded] = useFonts({
+  const [fontsLoaded] = useFonts({
     Afacad_400Regular,
   });
 
@@ -84,24 +139,24 @@ export default function UploadScreen({ navigation }) {
     });
   };
 
-  const openRenderedMxlDemo = () => {
-    navigation.push('Player', {
-      apiBaseUrl,
-      jobId: 'take-me-to-church',
-      musicxmlPath: '/api/download/take-me-to-church.mxl',
-      pageManifestPath: '/api/score-pages/take-me-to-church',
-      fileName: 'Take Me To Church - TW1',
-    });
-  };
+  const openProject = (project) => {
+    if (project.action === 'upload') {
+      pickDocument();
+      return;
+    }
 
-  const openYouAndIDemo = () => {
-    navigation.push('Player', {
-      apiBaseUrl,
-      jobId: 'you-and-i',
-      musicxmlPath: '/api/download/you-and-i.mxl',
-      pageManifestPath: '/api/score-pages/you-and-i',
-      fileName: 'You and I',
-    });
+    if (project.action === 'open' && project.jobId && project.pageManifestPath) {
+      navigation.push('Player', {
+        apiBaseUrl,
+        jobId: project.jobId,
+        musicxmlPath: project.musicxmlPath,
+        pageManifestPath: project.pageManifestPath,
+        fileName: project.title,
+      });
+      return;
+    }
+
+    Alert.alert('No Score Yet', 'Upload a PDF to create your first score project.');
   };
 
   const pollJobStatus = async (nextJobId, fileName) => {
@@ -127,6 +182,17 @@ export default function UploadScreen({ navigation }) {
       if (transcriptionDone && job.files?.score_pages) {
         clearPollTimer();
         setIsLoading(false);
+        setLatestProject({
+          id: `project-${nextJobId}`,
+          title: fileName,
+          subtitle: null,
+          icon: faFileMusic,
+          tone: 'neutral',
+          action: 'open',
+          jobId: nextJobId,
+          musicxmlPath: job.files.musicxml,
+          pageManifestPath: job.files.score_pages,
+        });
         goToRenderedScore(job, nextJobId, fileName);
         return;
       }
@@ -202,152 +268,277 @@ export default function UploadScreen({ navigation }) {
     }
   };
 
+  const projects = useMemo(() => {
+    if (!latestProject) {
+      return DEFAULT_PROJECTS;
+    }
+
+    return [DEFAULT_PROJECTS[0], latestProject, DEFAULT_PROJECTS[1], DEFAULT_PROJECTS[2], DEFAULT_PROJECTS[3]];
+  }, [latestProject]);
+  const pagePadding = width >= 768 ? 24 : 20;
+  const projectGap = width >= 768 ? 18 : 14;
+  const projectAspectRatio = 8.5 / 11;
+  const projectCardWidth = width >= 1024 ? 250 : width >= 768 ? 220 : 170;
+  const projectCardHeight = projectCardWidth / projectAspectRatio;
+  const snapInterval = projectCardWidth + projectGap;
+  const carouselSidePadding = Math.max(0, (width - projectCardWidth) / 2);
+  const carouselHeight = projectCardHeight + 40;
+
   if (!fontsLoaded) {
     return null;
   }
 
   return (
-    <View style={styles.container}>
-      <FontAwesomeIcon icon={faFileMusic} size={80} color={COLORS.lightBrown} />
-
-      <Text style={styles.title}>Upload Sheet Music</Text>
-      <Text style={styles.subtitle}>
-        Upload a PDF, let the backend transcribe it into MusicXML, and open a paginated digital
-        score view.
-      </Text>
-
-      <TouchableOpacity
-        style={[styles.uploadButton, isLoading && styles.uploadButtonDisabled]}
-        onPress={pickDocument}
-        disabled={isLoading}
+    <SafeAreaView style={styles.container}>
+      <ScrollView
+        contentContainerStyle={[styles.content, { paddingHorizontal: pagePadding, paddingVertical: pagePadding }]}
+        showsVerticalScrollIndicator={false}
       >
-        {isLoading ? (
-          <ActivityIndicator color={COLORS.beige} />
-        ) : (
-          <FontAwesomeIcon icon={faUpload} size={24} color={COLORS.beige} />
-        )}
-        <Text style={styles.uploadButtonText}>
-          {isLoading ? 'Processing Score...' : 'Choose PDF File'}
-        </Text>
-      </TouchableOpacity>
-
-      <TouchableOpacity
-        style={styles.demoButton}
-        onPress={openRenderedMxlDemo}
-      >
-        <FontAwesomeIcon icon={faFileMusic} size={22} color={COLORS.darkBrown} />
-        <Text style={styles.demoButtonText}>Open Rendered MXL Demo</Text>
-      </TouchableOpacity>
-
-      <TouchableOpacity
-        style={styles.demoButton}
-        onPress={openYouAndIDemo}
-      >
-        <FontAwesomeIcon icon={faFileMusic} size={22} color={COLORS.darkBrown} />
-        <Text style={styles.demoButtonText}>Open You and I Demo</Text>
-      </TouchableOpacity>
-
-      <View style={styles.infoBox}>
-        <View style={styles.statusRow}>
-          <FontAwesomeIcon
-            icon={selectedFile ? faCheckCircle : faClock}
-            size={18}
-            color={COLORS.beige}
-          />
-          <Text style={styles.infoText}>
-            {selectedFile ? `Selected file: ${selectedFile.name}` : 'Supported format: PDF'}
+        <View style={styles.hero}>
+          <Text style={styles.brand}>Scorely</Text>
+          <Text style={styles.heroTitle}>Your rehearsal library, ready to open and play.</Text>
+          <Text style={styles.heroSubtitle}>
+            Upload a PDF, transcribe it into MusicXML, and open a clean paginated score from any
+            device on your local setup.
           </Text>
         </View>
 
-        <Text style={styles.infoText}>{statusText}</Text>
-        {jobId ? <Text style={styles.jobText}>Job ID: {jobId}</Text> : null}
-      </View>
-    </View>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>Library</Text>
+          <Text style={styles.sectionCopy}>
+            Tap a paper tile to open a score or start a new transcription.
+          </Text>
+        </View>
+
+        <View style={[styles.carouselSection, { minHeight: carouselHeight + 36 }]}>
+          <Animated.ScrollView
+            horizontal
+            decelerationRate="fast"
+            snapToInterval={snapInterval}
+            disableIntervalMomentum
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={[
+              styles.projectCarousel,
+              {
+                paddingLeft: carouselSidePadding,
+                paddingRight: Math.max(0, carouselSidePadding - projectGap),
+              },
+            ]}
+            onScroll={Animated.event(
+              [{ nativeEvent: { contentOffset: { x: scrollX } } }],
+              { useNativeDriver: true }
+            )}
+            scrollEventThrottle={16}
+          >
+            {projects.map((project, index) => {
+              const inputRange = [
+                (index - 1) * snapInterval,
+                index * snapInterval,
+                (index + 1) * snapInterval,
+              ];
+              const scale = scrollX.interpolate({
+                inputRange,
+                outputRange: [0.8, 1.08, 0.8],
+                extrapolate: 'clamp',
+              });
+              const translateY = scrollX.interpolate({
+                inputRange,
+                outputRange: [18, 0, 18],
+                extrapolate: 'clamp',
+              });
+              const opacity = scrollX.interpolate({
+                inputRange,
+                outputRange: [0.62, 1, 0.62],
+                extrapolate: 'clamp',
+              });
+
+            return (
+              <Animated.View
+                key={project.id}
+                style={[
+                  styles.projectCardWrap,
+                  {
+                    width: projectCardWidth,
+                    height: carouselHeight,
+                    marginRight: projectGap,
+                    transform: [{ translateY }, { scale }],
+                    opacity,
+                  },
+                ]}
+              >
+                <TouchableOpacity
+                  style={[styles.projectCard, { width: projectCardWidth, height: projectCardHeight }]}
+                  onPress={() => openProject(project)}
+                  activeOpacity={0.9}
+                >
+                  <View style={styles.projectIconWrap}>
+                    <FontAwesomeIcon
+                      icon={project.icon}
+                      size={22}
+                      color={COLORS.primary}
+                    />
+                  </View>
+                  <Text style={styles.projectTitle}>{project.title}</Text>
+                  {project.subtitle ? <Text style={styles.projectSubtitle}>{project.subtitle}</Text> : null}
+                </TouchableOpacity>
+              </Animated.View>
+            );
+            })}
+          </Animated.ScrollView>
+        </View>
+
+        <View style={styles.statusCard}>
+          <View style={styles.statusHeader}>
+            <View style={styles.statusRow}>
+              <FontAwesomeIcon
+                icon={selectedFile ? faCheckCircle : faClock}
+                size={18}
+                color={COLORS.primary}
+              />
+              <Text style={styles.statusLabel}>
+                {selectedFile ? `Selected file: ${selectedFile.name}` : 'Supported format: PDF'}
+              </Text>
+            </View>
+            {isLoading ? <ActivityIndicator color={COLORS.primary} /> : null}
+          </View>
+
+          <Text style={styles.statusText}>{statusText}</Text>
+          {jobId ? <Text style={styles.jobText}>Job ID: {jobId}</Text> : null}
+        </View>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: COLORS.beige,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 20,
+    backgroundColor: COLORS.background,
   },
-  title: {
+  content: {
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 20,
+  },
+  hero: {
+    marginBottom: 28,
+  },
+  brand: {
     fontFamily: 'Afacad_400Regular',
-    fontSize: 36,
-    color: COLORS.darkBrown,
-    marginTop: 30,
+    fontSize: 40,
+    color: COLORS.primary,
     marginBottom: 10,
   },
-  subtitle: {
+  heroTitle: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 28,
+    lineHeight: 32,
+    color: COLORS.primary,
+    marginBottom: 10,
+    maxWidth: 720,
+  },
+  heroSubtitle: {
     fontFamily: 'Afacad_400Regular',
     fontSize: 18,
-    color: COLORS.lightBrown,
-    textAlign: 'center',
-    marginBottom: 40,
-    maxWidth: 700,
+    lineHeight: 24,
+    color: COLORS.muted,
+    maxWidth: 760,
   },
-  uploadButton: {
-    backgroundColor: COLORS.darkBrown,
-    paddingHorizontal: 40,
-    paddingVertical: 20,
-    borderRadius: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 30,
-    minWidth: 280,
-    justifyContent: 'center',
+  sectionHeader: {
+    marginBottom: 16,
   },
-  uploadButtonDisabled: {
-    opacity: 0.85,
-  },
-  uploadButtonText: {
+  sectionTitle: {
     fontFamily: 'Afacad_400Regular',
-    fontSize: 20,
-    color: COLORS.beige,
-    marginLeft: 15,
+    fontSize: 24,
+    color: COLORS.primary,
+    marginBottom: 4,
   },
-  demoButton: {
-    backgroundColor: '#EADFD2',
-    paddingHorizontal: 34,
-    paddingVertical: 16,
-    borderRadius: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
+  sectionCopy: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 17,
+    color: COLORS.muted,
+  },
+  carouselSection: {
+    justifyContent: 'center',
     marginBottom: 12,
   },
-  demoButtonText: {
-    fontFamily: 'Afacad_400Regular',
-    fontSize: 19,
-    color: COLORS.darkBrown,
-    marginLeft: 12,
+  projectCarousel: {
+    alignItems: 'center',
+    paddingTop: 10,
+    paddingBottom: 16,
   },
-  infoBox: {
-    backgroundColor: COLORS.lightBrown,
-    padding: 20,
-    borderRadius: 8,
-    marginTop: 20,
-    width: '80%',
-    maxWidth: 760,
+  projectCardWrap: {
+    justifyContent: 'center',
+  },
+  projectCard: {
+    backgroundColor: COLORS.card,
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingTop: 14,
+    paddingBottom: 16,
+    borderWidth: 1,
+    borderColor: COLORS.stroke,
+    justifyContent: 'flex-start',
+    shadowColor: COLORS.primary,
+    shadowOpacity: 1,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 3,
+  },
+  projectIconWrap: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    backgroundColor: '#F2E8DA',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  projectTitle: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 20,
+    color: COLORS.primary,
+    marginTop: 14,
+  },
+  projectSubtitle: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 15,
+    lineHeight: 20,
+    color: COLORS.muted,
+    marginTop: 8,
+  },
+  statusCard: {
+    backgroundColor: COLORS.card,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: COLORS.stroke,
+    padding: 18,
+  },
+  statusHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
   },
   statusRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 12,
   },
-  infoText: {
+  statusLabel: {
     fontFamily: 'Afacad_400Regular',
-    fontSize: 16,
-    color: COLORS.beige,
-    textAlign: 'center',
+    fontSize: 17,
+    color: COLORS.primary,
+    marginLeft: 10,
+  },
+  statusText: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 17,
+    color: COLORS.muted,
+    lineHeight: 22,
   },
   jobText: {
     fontFamily: 'Afacad_400Regular',
     fontSize: 14,
-    color: COLORS.beige,
-    textAlign: 'center',
+    color: COLORS.muted,
     marginTop: 10,
   },
 });

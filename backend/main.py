@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import shutil
+import struct
 import uuid
 import copy
 from pathlib import Path
@@ -159,8 +160,8 @@ class AlignmentResponse(BaseModel):
 class ScorePageInfo(BaseModel):
     page_number: int
     image_path: str
-    width: int
-    height: int
+    width: Optional[int] = None
+    height: Optional[int] = None
 
 
 class ScoreMetadata(BaseModel):
@@ -168,6 +169,14 @@ class ScoreMetadata(BaseModel):
     composer: Optional[str] = None
     total_pages: int
     pages: List[ScorePageInfo]
+
+
+class ScorePagesResponse(BaseModel):
+    job_id: str
+    title: Optional[str] = None
+    page_count: int
+    pages: List[ScorePageInfo]
+    musicxml_path: Optional[str] = None
 
 
 # --- HELPER FUNCTIONS ---
@@ -204,28 +213,144 @@ def extract_alignment(score_path: Path) -> Dict:
         return {"tempo": 120.0, "mappings": []}
 
 
-def render_score_pages(job_id: str, musicxml_path: Path):
-    """Placeholder: extract metadata and identify score pages."""
+def _read_png_dimensions(image_path: Path) -> tuple[int, int]:
+    """Read width/height directly from the PNG IHDR chunk."""
     try:
-        s = converter.parse(str(musicxml_path))
-        score_title = s.metadata.title if s.metadata else "Unknown"
-        composer = s.metadata.composer if s.metadata else "Unknown"
+        with image_path.open("rb") as file_handle:
+            header = file_handle.read(24)
+        if header[:8] != b"\x89PNG\r\n\x1a\n":
+            raise ValueError("Not a PNG file")
+        width, height = struct.unpack(">II", header[16:24])
+        return width, height
+    except Exception:
+        return 1240, 1754
 
-        # In a real implementation, we would use Verovio or MuseScore
-        # to render the MusicXML to SVGs or PNGs.
-        # For now, we'll simulate page mapping for the frontend.
-        pages = [
-            {"page_number": 1, "image_path": f"/api/download/{job_id}_p1.png", "width": 800, "height": 1100}
-        ]
 
-        jobs[job_id]["score_metadata"] = {
-            "title": score_title,
-            "composer": composer,
-            "total_pages": len(pages),
-            "pages": pages,
+def _build_manifest_from_existing_pages(job_id: str, musicxml_path: Path) -> Optional[Dict]:
+    """Reuse previously rendered page PNGs if they already exist on disk."""
+    existing_pages = sorted(
+        OUTPUT_DIR.glob(f"{job_id}_page_*.png"),
+        key=lambda path: int(path.stem.rsplit("_", 1)[-1]),
+    )
+    if not existing_pages:
+        return None
+
+    score = converter.parse(str(musicxml_path))
+    title = score.metadata.title if score.metadata and score.metadata.title else "Untitled score"
+
+    pages = []
+    for index, page_path in enumerate(existing_pages, start=1):
+        width, height = _read_png_dimensions(page_path)
+        pages.append(
+            {
+                "page_number": index,
+                "image_path": f"/api/download/{page_path.name}",
+                "width": width,
+                "height": height,
+            }
+        )
+
+    return {
+        "job_id": job_id,
+        "title": title,
+        "page_count": len(pages),
+        "pages": pages,
+        "musicxml_path": f"/api/download/{musicxml_path.name}",
+    }
+
+
+def _normalize_manifest(manifest: Dict) -> Dict:
+    """Fill in missing fields for older cached page manifests."""
+    normalized_pages = []
+    for page in manifest.get("pages", []):
+        normalized_page = dict(page)
+        image_name = Path(normalized_page["image_path"]).name
+        image_path = OUTPUT_DIR / image_name
+        width = normalized_page.get("width")
+        height = normalized_page.get("height")
+        if width is None or height is None:
+            width, height = _read_png_dimensions(image_path)
+        normalized_page["width"] = width
+        normalized_page["height"] = height
+        normalized_pages.append(normalized_page)
+
+    manifest["pages"] = normalized_pages
+    manifest["page_count"] = manifest.get("page_count", len(normalized_pages))
+    return manifest
+
+
+def _render_pages_with_verovio(job_id: str, musicxml_path: Path) -> Dict:
+    """Render MusicXML to paginated PNG score pages using Verovio."""
+    import cairosvg
+    import verovio
+
+    toolkit = verovio.toolkit()
+    toolkit.setOptions(
+        {
+            "pageWidth": 2100,
+            "pageHeight": 2970,
+            "scale": 42,
+            "footer": "none",
+            "header": "none",
+            "adjustPageHeight": False,
         }
-    except Exception as exc:
-        logger.error("Score rendering failed for %s: %s", job_id, exc)
+    )
+    toolkit.loadFile(str(musicxml_path))
+
+    page_count = toolkit.getPageCount()
+    if page_count <= 0:
+        raise RuntimeError("Verovio could not paginate this score")
+
+    score = converter.parse(str(musicxml_path))
+    title = score.metadata.title if score.metadata and score.metadata.title else "Untitled score"
+    pages = []
+
+    for page_number in range(1, page_count + 1):
+        svg = toolkit.renderToSVG(page_number)
+        png_path = OUTPUT_DIR / f"{job_id}_page_{page_number}.png"
+        cairosvg.svg2png(bytestring=svg.encode("utf-8"), write_to=str(png_path))
+        width, height = _read_png_dimensions(png_path)
+        pages.append(
+            {
+                "page_number": page_number,
+                "image_path": f"/api/download/{png_path.name}",
+                "width": width,
+                "height": height,
+            }
+        )
+
+    return {
+        "job_id": job_id,
+        "title": title,
+        "page_count": len(pages),
+        "pages": pages,
+        "musicxml_path": f"/api/download/{musicxml_path.name}",
+    }
+
+
+def render_score_pages(job_id: str, musicxml_path: Path) -> Dict:
+    """Render and cache score pages for a MusicXML file."""
+    manifest_path = OUTPUT_DIR / f"{job_id}_pages.json"
+
+    if manifest_path.exists():
+        manifest = _normalize_manifest(json.loads(manifest_path.read_text()))
+        manifest_path.write_text(json.dumps(manifest, indent=2))
+    else:
+        manifest = _build_manifest_from_existing_pages(job_id, musicxml_path)
+        if manifest is None:
+            manifest = _render_pages_with_verovio(job_id, musicxml_path)
+        manifest_path.write_text(json.dumps(manifest, indent=2))
+
+    if job_id in jobs:
+        jobs[job_id]["score_metadata"] = {
+            "title": manifest.get("title"),
+            "composer": None,
+            "total_pages": manifest["page_count"],
+            "pages": manifest["pages"],
+        }
+        jobs[job_id]["files"]["score_pages"] = f"/api/score-pages/{job_id}"
+
+    return manifest
 
 
 def render_midi_to_mp3(midi_path: Path, mp3_path: Path):
@@ -399,7 +524,7 @@ async def transcribe_pdf(background_tasks: BackgroundTasks, file: UploadFile = F
     jobs[job_id] = {
         "status": "processing",
         "progress": {"transcription": "queued", "audio_conversion": "not_started"},
-        "files": {"musicxml": None, "parts": []},
+        "files": {"musicxml": None, "score_pages": None, "parts": []},
     }
 
     background_tasks.add_task(run_full_pipeline, job_id, pdf_path)
@@ -413,6 +538,10 @@ async def get_job_status(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
 
     job = jobs[job_id]
+    manifest_path = OUTPUT_DIR / f"{job_id}_pages.json"
+    if job["files"].get("score_pages") is None and manifest_path.exists():
+        job["files"]["score_pages"] = f"/api/score-pages/{job_id}"
+
     return {
         "job_id": job_id,
         "status": job["status"],
@@ -435,11 +564,16 @@ async def convert_to_audio(background_tasks: BackgroundTasks, request: Conversio
         jobs[job_id] = {
             "status": "processing",
             "progress": {"transcription": "completed", "audio_conversion": "queued"},
-            "files": {"musicxml": f"/api/download/{job_id}.mxl", "parts": []},
+            "files": {
+                "musicxml": f"/api/download/{job_id}.mxl",
+                "score_pages": f"/api/score-pages/{job_id}",
+                "parts": [],
+            },
         }
     else:
         jobs[job_id]["status"] = "processing"
         jobs[job_id]["progress"]["audio_conversion"] = "queued"
+        jobs[job_id]["files"]["score_pages"] = f"/api/score-pages/{job_id}"
 
     background_tasks.add_task(run_audio_pipeline, job_id, mxl_path)
 
@@ -463,12 +597,35 @@ async def get_score_metadata(job_id: str):
     if job_id not in jobs or "score_metadata" not in jobs[job_id]:
         mxl_path = OUTPUT_DIR / f"{job_id}.mxl"
         if mxl_path.exists():
-            render_score_pages(job_id, mxl_path)
-            if "score_metadata" in jobs[job_id]:
-                return jobs[job_id]["score_metadata"]
+            manifest = render_score_pages(job_id, mxl_path)
+            return {
+                "title": manifest.get("title"),
+                "composer": None,
+                "total_pages": manifest["page_count"],
+                "pages": manifest["pages"],
+            }
         raise HTTPException(status_code=404, detail="Score metadata not found")
 
     return jobs[job_id]["score_metadata"]
+
+
+@app.get("/api/score-pages/{job_id}", response_model=ScorePagesResponse)
+async def get_score_pages(job_id: str):
+    manifest_path = OUTPUT_DIR / f"{job_id}_pages.json"
+    if manifest_path.exists():
+        manifest = _normalize_manifest(json.loads(manifest_path.read_text()))
+        manifest_path.write_text(json.dumps(manifest, indent=2))
+        return manifest
+
+    mxl_path = OUTPUT_DIR / f"{job_id}.mxl"
+    if not mxl_path.exists():
+        raise HTTPException(status_code=404, detail="Rendered score pages not found")
+
+    try:
+        return render_score_pages(job_id, mxl_path)
+    except Exception as exc:
+        logger.error("Failed to build score pages for %s: %s", job_id, exc)
+        raise HTTPException(status_code=500, detail="Failed to render paginated score pages") from exc
 
 
 @app.get("/api/download/{filename}")
