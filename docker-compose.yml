@@ -1,0 +1,46 @@
+services:
+  # FastAPI Backend
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: scorely-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - ./backend/uploads:/app/uploads
+      - ./backend/outputs:/app/outputs
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - AUDIVERIS_HOST=audiveris
+      - AUDIVERIS_PORT=8081
+    depends_on:
+      - audiveris
+    networks:
+      - scorely-network
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Audiveris OMR Service (Built from source with Java 25)
+  audiveris:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.audiveris
+    container_name: scorely-audiveris
+    volumes:
+      # Shared directory for PDFs and MusicXML outputs
+      - ./backend/uploads:/audiveris/input
+      - ./backend/outputs:/audiveris/output
+    environment:
+      - TESSDATA_PREFIX=/usr/share/tesseract-ocr/tessdata
+    networks:
+      - scorely-network
+    # Container stays running and waits for exec commands
+
+networks:
+  scorely-network:
+    driver: bridge
+
+volumes:
+  uploads:
+  outputs:

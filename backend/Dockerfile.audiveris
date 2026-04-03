@@ -1,0 +1,46 @@
+# Audiveris OMR Service - Fully Self-Contained
+# Uses Java 25 and builds Audiveris from source automatically
+
+FROM eclipse-temurin:25-jdk-jammy
+
+WORKDIR /audiveris
+
+# Install required tools and Tesseract OCR
+RUN apt-get update && apt-get install -y \
+    git \
+    curl \
+    unzip \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    libtesseract-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy all source files
+COPY ./audiveris-5.10.2 /audiveris/
+
+# Initialize dummy git to satisfy Audiveris build script's getCommit task
+RUN git init && \
+    git config user.email "you@example.com" && \
+    git config user.name "Your Name" && \
+    git add . && \
+    git commit -m "initial"
+
+# Make gradlew executable
+RUN chmod +x gradlew
+
+# Build Audiveris (this will take a few minutes first time)
+# Using -x test to speed up the build. We use installDist to get all dependencies.
+RUN ./gradlew :app:installDist -x test
+
+# Create input/output directories
+RUN mkdir -p /audiveris/input /audiveris/output
+
+# The built distribution will be in app/build/install/app/
+# We'll create a simple wrapper script to run it
+
+RUN echo '#!/bin/bash\n\
+/audiveris/app/build/install/app/bin/Audiveris "$@"' > /usr/local/bin/audiveris \
+    && chmod +x /usr/local/bin/audiveris
+
+# Default command - wait for requests
+CMD ["tail", "-f", "/dev/null"]

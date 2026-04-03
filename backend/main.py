@@ -13,6 +13,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import aiofiles
 
+from audiveris_service import get_audiveris_service
+
 # Initialize FastAPI app
 app = FastAPI(
     title="Scorely API",
@@ -64,10 +66,7 @@ async def root():
 @app.post("/api/transcribe", response_model=TranscriptionResponse)
 async def transcribe_pdf(file: UploadFile = File(...)):
     """
-    Upload a PDF file and transcribe it to MusicXML using OMR.
-
-    Note: This endpoint currently returns a placeholder.
-    Audiveris integration requires Java runtime and additional setup.
+    Upload a PDF file and transcribe it to MusicXML using Audiveris OMR.
     """
     if not file.filename.endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Only PDF files are supported")
@@ -81,18 +80,39 @@ async def transcribe_pdf(file: UploadFile = File(...)):
         content = await file.read()
         await out_file.write(content)
 
-    # TODO: Integrate Audiveris for actual OMR transcription
-    # For now, this is a placeholder that would call:
-    # subprocess.run(['java', '-jar', 'audiveris.jar', '-batch', '-export', str(pdf_path)])
+    # Try to use Audiveris for transcription
+    audiveris = get_audiveris_service()
 
-    musicxml_path = f"outputs/{job_id}.mxl"
+    if audiveris:
+        try:
+            # Run Audiveris transcription
+            musicxml_path = audiveris.transcribe_pdf(
+                str(pdf_path),
+                str(OUTPUT_DIR)
+            )
 
-    return TranscriptionResponse(
-        status="success",
-        job_id=job_id,
-        musicxml_path=musicxml_path,
-        message="PDF uploaded successfully. OMR processing would happen here (Audiveris not yet integrated)."
-    )
+            return TranscriptionResponse(
+                status="success",
+                job_id=job_id,
+                musicxml_path=musicxml_path,
+                message="PDF successfully transcribed to MusicXML using Audiveris"
+            )
+        except Exception as e:
+            # If Audiveris fails, return error but keep the uploaded PDF
+            raise HTTPException(
+                status_code=500,
+                detail=f"Audiveris transcription failed: {str(e)}"
+            )
+    else:
+        # Audiveris not available - return placeholder
+        musicxml_path = f"outputs/{job_id}.mxl"
+
+        return TranscriptionResponse(
+            status="success",
+            job_id=job_id,
+            musicxml_path=musicxml_path,
+            message="PDF uploaded. Audiveris not configured - please install Audiveris or use Docker setup."
+        )
 
 
 @app.post("/api/convert-to-midi", response_model=MidiConversionResponse)

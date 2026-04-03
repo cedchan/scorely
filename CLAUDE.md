@@ -48,12 +48,29 @@ The app follows a consistent design system:
 
 ## Development Commands
 
-### Backend API
+### Docker Setup (Recommended for Teams)
+```bash
+# One-time setup: Install Audiveris DMG or place JAR in backend/audiveris/
+# See DOCKER_SETUP.md for detailed instructions
+
+docker-compose up --build         # Start all services
+# API available at http://localhost:8000
+# API docs at http://localhost:8000/docs
+
+docker-compose down               # Stop services
+docker-compose logs -f api        # View logs
+```
+
+### Backend API (Local Development)
 ```bash
 cd backend
 python3 -m venv venv              # Create virtual environment
 source venv/bin/activate          # Activate (macOS/Linux)
 pip install -r requirements.txt   # Install dependencies
+
+# Install Audiveris first (DMG or JAR)
+export AUDIVERIS_PATH=/Applications/Audiveris.app/Contents/MacOS/Audiveris
+
 uvicorn main:app --reload --port 8000  # Start API server
 
 # Test the API

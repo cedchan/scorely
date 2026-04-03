@@ -26,3 +26,9 @@ ENV/
 backend/uploads/
 backend/outputs/
 *.log
+
+# Environment variables
+.env
+
+# Docker
+.docker/
