@@ -20,6 +20,9 @@ import {
   faPause,
   faPlay,
 } from '@fortawesome/free-solid-svg-icons';
+import AnnotationLayer from '../components/AnnotationLayer';
+import AnnotationToolbar from '../components/AnnotationToolbar';
+import annotationSyncService from '../services/annotationSync';
 
 const COLORS = {
   beige: '#FAF7F0',
@@ -43,6 +46,14 @@ export default function PlayerScreen({ route }) {
   const [audioError, setAudioError] = useState(null);
   const [alignmentMappings, setAlignmentMappings] = useState([]);
   const [activeMeasure, setActiveMeasure] = useState(null);
+
+  // Annotation state
+  const [annotations, setAnnotations] = useState([]);
+  const [annotationsEnabled, setAnnotationsEnabled] = useState(false);
+  const [currentTool, setCurrentTool] = useState('pen');
+  const [currentColor, setCurrentColor] = useState('#58392F');
+  const [currentStrokeWidth, setCurrentStrokeWidth] = useState(4);
+  const [userId] = useState(() => annotationSyncService.generateUserId());
 
   const apiBaseUrl = route.params?.apiBaseUrl || 'http://localhost:8000';
   const pageManifestPath = route.params?.pageManifestPath;
@@ -186,6 +197,59 @@ export default function PlayerScreen({ route }) {
     setActiveMeasure(null);
   }, [playbackUrl]);
 
+  // Annotation WebSocket connection
+  useEffect(() => {
+    if (!jobId) return;
+
+    // Connect to annotation sync
+    annotationSyncService.connect(apiBaseUrl, jobId, userId);
+
+    // Set up event listeners
+    const handleSyncResponse = ({ annotations: syncedAnnotations }) => {
+      setAnnotations(syncedAnnotations);
+    };
+
+    const handleAnnotationAdded = ({ annotation }) => {
+      setAnnotations((prev) => {
+        // Avoid duplicates
+        if (prev.some((a) => a.id === annotation.id)) {
+          return prev;
+        }
+        return [...prev, annotation];
+      });
+    };
+
+    const handleAnnotationUpdated = ({ annotation }) => {
+      setAnnotations((prev) =>
+        prev.map((a) => (a.id === annotation.id ? annotation : a))
+      );
+    };
+
+    const handleAnnotationDeleted = ({ annotationId }) => {
+      setAnnotations((prev) => prev.filter((a) => a.id !== annotationId));
+    };
+
+    const handleError = ({ error }) => {
+      console.error('Annotation sync error:', error);
+    };
+
+    annotationSyncService.on('sync_response', handleSyncResponse);
+    annotationSyncService.on('annotation_added', handleAnnotationAdded);
+    annotationSyncService.on('annotation_updated', handleAnnotationUpdated);
+    annotationSyncService.on('annotation_deleted', handleAnnotationDeleted);
+    annotationSyncService.on('error', handleError);
+
+    // Cleanup
+    return () => {
+      annotationSyncService.off('sync_response', handleSyncResponse);
+      annotationSyncService.off('annotation_added', handleAnnotationAdded);
+      annotationSyncService.off('annotation_updated', handleAnnotationUpdated);
+      annotationSyncService.off('annotation_deleted', handleAnnotationDeleted);
+      annotationSyncService.off('error', handleError);
+      annotationSyncService.disconnect();
+    };
+  }, [apiBaseUrl, jobId, userId]);
+
   useEffect(() => {
     let objectUrl = null;
 
@@ -301,6 +365,37 @@ export default function PlayerScreen({ route }) {
     }
   };
 
+  // Annotation handlers
+  const handleAnnotationCreated = (annotation) => {
+    // Send to server via WebSocket
+    annotationSyncService.addAnnotation(annotation);
+
+    // Optimistically add to local state
+    setAnnotations((prev) => [...prev, annotation]);
+  };
+
+  const handleAnnotationUpdated = (annotation) => {
+    annotationSyncService.updateAnnotation(annotation);
+    setAnnotations((prev) =>
+      prev.map((a) => (a.id === annotation.id ? annotation : a))
+    );
+  };
+
+  const handleClearAllAnnotations = () => {
+    // Delete all annotations for current page
+    const pageAnnotations = annotations.filter(
+      (ann) => ann.page_number === currentPage + 1
+    );
+
+    pageAnnotations.forEach((ann) => {
+      annotationSyncService.deleteAnnotation(ann.id);
+    });
+
+    setAnnotations((prev) =>
+      prev.filter((ann) => ann.page_number !== currentPage + 1)
+    );
+  };
+
   if (!fontsLoaded) {
     return null;
   }
@@ -376,6 +471,19 @@ export default function PlayerScreen({ route }) {
         </View>
       </View>
 
+      {/* Annotation Toolbar */}
+      <AnnotationToolbar
+        currentTool={currentTool}
+        currentColor={currentColor}
+        currentStrokeWidth={currentStrokeWidth}
+        enabled={annotationsEnabled}
+        onToolChange={setCurrentTool}
+        onColorChange={setCurrentColor}
+        onStrokeWidthChange={setCurrentStrokeWidth}
+        onClearAll={handleClearAllAnnotations}
+        onToggleEnabled={() => setAnnotationsEnabled(!annotationsEnabled)}
+      />
+
       <ScrollView
         ref={scrollViewRef}
         pagingEnabled
@@ -384,6 +492,7 @@ export default function PlayerScreen({ route }) {
         contentContainerStyle={styles.pageListContent}
         onMomentumScrollEnd={onMomentumScrollEnd}
         showsHorizontalScrollIndicator={false}
+        scrollEnabled={!annotationsEnabled}
       >
         {pages.map((item) => (
           <View
@@ -452,6 +561,20 @@ export default function PlayerScreen({ route }) {
                   },
                 ]}
                 resizeMode="contain"
+              />
+
+              {/* Annotation Layer */}
+              <AnnotationLayer
+                pageNumber={item.page_number}
+                width={width - pageHorizontalPadding * 2 - (isTabletLayout ? 40 : 28)}
+                height={availablePageHeight - (isTabletLayout ? 80 : 70)}
+                annotations={annotations}
+                currentTool={currentTool}
+                currentColor={currentColor}
+                currentStrokeWidth={currentStrokeWidth}
+                onAnnotationCreated={handleAnnotationCreated}
+                onAnnotationUpdated={handleAnnotationUpdated}
+                enabled={annotationsEnabled && currentPage === item.page_number - 1}
               />
             </View>
           </View>

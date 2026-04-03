@@ -8,16 +8,18 @@ import shutil
 import uuid
 import copy
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 import aiofiles
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from music21 import converter, metadata, stream, tempo, note
 from pydantic import BaseModel
+import y_py as Y
 
 from audiveris_service import get_audiveris_service
+from annotation_service import annotation_store, Annotation
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -43,6 +45,61 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 
 # In-memory job tracking
 jobs: Dict[str, dict] = {}
+
+
+# --- WEBSOCKET CONNECTION MANAGER ---
+
+
+class ConnectionManager:
+    """Manages WebSocket connections for real-time annotation sync"""
+
+    def __init__(self):
+        # {job_id: Set[WebSocket]}
+        self.active_connections: Dict[str, Set[WebSocket]] = {}
+
+    async def connect(self, websocket: WebSocket, job_id: str):
+        """Connect a client to a job's annotation room"""
+        await websocket.accept()
+
+        if job_id not in self.active_connections:
+            self.active_connections[job_id] = set()
+
+        self.active_connections[job_id].add(websocket)
+        logger.info(f"Client connected to job {job_id}. Total connections: {len(self.active_connections[job_id])}")
+
+    def disconnect(self, websocket: WebSocket, job_id: str):
+        """Disconnect a client from a job's annotation room"""
+        if job_id in self.active_connections:
+            self.active_connections[job_id].discard(websocket)
+            logger.info(f"Client disconnected from job {job_id}. Remaining: {len(self.active_connections[job_id])}")
+
+            # Clean up empty rooms
+            if not self.active_connections[job_id]:
+                del self.active_connections[job_id]
+
+    async def broadcast(self, job_id: str, message: dict, exclude: Optional[WebSocket] = None):
+        """Broadcast message to all clients in a job room"""
+        if job_id not in self.active_connections:
+            return
+
+        disconnected = []
+
+        for connection in self.active_connections[job_id]:
+            if connection == exclude:
+                continue
+
+            try:
+                await connection.send_json(message)
+            except Exception as e:
+                logger.error(f"Failed to send message to client: {e}")
+                disconnected.append(connection)
+
+        # Clean up disconnected clients
+        for connection in disconnected:
+            self.disconnect(connection, job_id)
+
+
+connection_manager = ConnectionManager()
 
 
 # --- SCHEMAS ---
@@ -438,3 +495,180 @@ async def download_file(filename: str):
         media_type = "image/png"
 
     return FileResponse(path=str(file_path), media_type=media_type, filename=filename)
+
+
+# --- ANNOTATION REST ENDPOINTS ---
+
+
+@app.get("/api/annotations/{job_id}")
+async def get_annotations(job_id: str):
+    """Get all annotations for a job"""
+    annotations = annotation_store.get_all(job_id)
+    return {
+        "job_id": job_id,
+        "annotations": [ann.model_dump() for ann in annotations]
+    }
+
+
+@app.post("/api/annotations/{job_id}")
+async def create_annotation(job_id: str, annotation: Annotation):
+    """Create a new annotation (REST fallback)"""
+    annotation.job_id = job_id
+    created_ann = annotation_store.create(annotation)
+
+    # Broadcast to WebSocket clients
+    await connection_manager.broadcast(
+        job_id,
+        {
+            "type": "annotation_added",
+            "annotation": created_ann.model_dump()
+        }
+    )
+
+    return created_ann.model_dump()
+
+
+@app.delete("/api/annotations/{job_id}/{annotation_id}")
+async def delete_annotation(job_id: str, annotation_id: str):
+    """Delete an annotation"""
+    success = annotation_store.delete(job_id, annotation_id)
+
+    if not success:
+        raise HTTPException(status_code=404, detail="Annotation not found")
+
+    # Broadcast to WebSocket clients
+    await connection_manager.broadcast(
+        job_id,
+        {
+            "type": "annotation_deleted",
+            "annotation_id": annotation_id
+        }
+    )
+
+    return {"success": True, "annotation_id": annotation_id}
+
+
+# --- ANNOTATION WEBSOCKET ENDPOINT ---
+
+
+@app.websocket("/ws/annotations/{job_id}")
+async def websocket_annotations(websocket: WebSocket, job_id: str):
+    """WebSocket endpoint for real-time annotation synchronization"""
+    await connection_manager.connect(websocket, job_id)
+
+    try:
+        # Send initial state (all existing annotations)
+        annotations = annotation_store.get_all(job_id)
+        await websocket.send_json({
+            "type": "sync_response",
+            "annotations": [ann.model_dump() for ann in annotations]
+        })
+
+        # Send Yjs state vector
+        state_vector = annotation_store.get_yjs_state_vector(job_id)
+        await websocket.send_json({
+            "type": "yjs_state_vector",
+            "state_vector": state_vector.hex()
+        })
+
+        # Listen for client messages
+        while True:
+            data = await websocket.receive_json()
+            message_type = data.get("type")
+
+            if message_type == "annotation_added":
+                # Client created a new annotation
+                ann_data = data.get("annotation")
+                if ann_data:
+                    try:
+                        annotation = Annotation(**ann_data)
+                        created_ann = annotation_store.create(annotation)
+
+                        # Broadcast to other clients
+                        await connection_manager.broadcast(
+                            job_id,
+                            {
+                                "type": "annotation_added",
+                                "annotation": created_ann.model_dump()
+                            },
+                            exclude=websocket
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to create annotation: {e}")
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": f"Failed to create annotation: {str(e)}"
+                        })
+
+            elif message_type == "annotation_updated":
+                # Client updated an annotation
+                ann_data = data.get("annotation")
+                if ann_data:
+                    try:
+                        annotation = Annotation(**ann_data)
+                        updated_ann = annotation_store.update(annotation)
+
+                        if updated_ann:
+                            # Broadcast to other clients
+                            await connection_manager.broadcast(
+                                job_id,
+                                {
+                                    "type": "annotation_updated",
+                                    "annotation": updated_ann.model_dump()
+                                },
+                                exclude=websocket
+                            )
+                    except Exception as e:
+                        logger.error(f"Failed to update annotation: {e}")
+
+            elif message_type == "annotation_deleted":
+                # Client deleted an annotation
+                annotation_id = data.get("annotation_id")
+                if annotation_id:
+                    success = annotation_store.delete(job_id, annotation_id)
+
+                    if success:
+                        # Broadcast to other clients
+                        await connection_manager.broadcast(
+                            job_id,
+                            {
+                                "type": "annotation_deleted",
+                                "annotation_id": annotation_id
+                            },
+                            exclude=websocket
+                        )
+
+            elif message_type == "yjs_update":
+                # Client sent Yjs update
+                update_hex = data.get("update")
+                if update_hex:
+                    try:
+                        update_bytes = bytes.fromhex(update_hex)
+                        annotation_store.apply_yjs_update(job_id, update_bytes)
+
+                        # Broadcast to other clients
+                        await connection_manager.broadcast(
+                            job_id,
+                            {
+                                "type": "yjs_update",
+                                "update": update_hex
+                            },
+                            exclude=websocket
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to apply Yjs update: {e}")
+
+            elif message_type == "sync_request":
+                # Client requested full sync
+                annotations = annotation_store.get_all(job_id)
+                await websocket.send_json({
+                    "type": "sync_response",
+                    "annotations": [ann.model_dump() for ann in annotations]
+                })
+
+    except WebSocketDisconnect:
+        connection_manager.disconnect(websocket, job_id)
+        logger.info(f"WebSocket disconnected for job {job_id}")
+    except Exception as e:
+        logger.error(f"WebSocket error for job {job_id}: {e}")
+        connection_manager.disconnect(websocket, job_id)
