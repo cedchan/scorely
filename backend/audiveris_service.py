@@ -114,20 +114,20 @@ class AudiverisService:
                     f"Audiveris failed: {result.stderr}"
                 )
 
-            # Find the generated MusicXML file
-            # Audiveris typically creates .mxl files with the same name as input
+            # Find the generated MusicXML file for this specific upload.
+            # Audiveris sometimes exports `<stem>.mxl`, and other times it exports
+            # movement files such as `<stem>.mvt1.mxl`, `<stem>.mvt2.mxl`, etc.
             expected_output = output_dir / f"{pdf_path.stem}.mxl"
 
             if expected_output.exists():
                 return str(expected_output)
 
-            # Search for any .mxl file in output directory
-            mxl_files = list(output_dir.glob("*.mxl"))
-            if mxl_files:
-                return str(mxl_files[0])
+            matching_mxl_files = sorted(output_dir.glob(f"{pdf_path.stem}*.mxl"))
+            if matching_mxl_files:
+                return str(matching_mxl_files[0])
 
             raise FileNotFoundError(
-                f"No MusicXML output found in {output_dir}"
+                f"No MusicXML output found for {pdf_path.stem} in {output_dir}"
             )
 
         except subprocess.TimeoutExpired:

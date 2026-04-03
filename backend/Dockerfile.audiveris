@@ -18,6 +18,10 @@ RUN apt-get update && apt-get install -y \
 # Copy all source files
 COPY ./audiveris-5.10.2 /audiveris/
 
+# The vendored Audiveris source in this repo does not include gradle.properties,
+# but the build expects these baseline values to exist.
+RUN printf "theMinJavaVersion=24\ntheTessdataTag=4.1.0\n" > /audiveris/gradle.properties
+
 # Initialize dummy git to satisfy Audiveris build script's getCommit task
 RUN git init && \
     git config user.email "you@example.com" && \
