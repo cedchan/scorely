@@ -131,14 +131,23 @@ docker-compose exec api pip install new-package
 ### Using curl
 
 ```bash
-# Upload PDF for transcription
+# Upload PDF for transcription (Full pipeline: PDF → MusicXML → MIDI → MP3)
 curl -X POST http://localhost:8000/api/transcribe \
   -F "file=@path/to/sheet_music.pdf"
 
-# Convert MusicXML to MIDI
-curl -X POST http://localhost:8000/api/convert-to-midi \
-  -H "Content-Type: application/json" \
-  -d '{"musicxml_path": "outputs/your-file.mxl"}'
+# Returns job_id for status tracking
+
+# Check job status
+curl http://localhost:8000/api/status/{job_id}
+
+# Download generated files
+curl http://localhost:8000/api/download/{job_id}.mxl  # MusicXML
+curl http://localhost:8000/api/download/{job_id}_full.mp3  # Full audio
+curl http://localhost:8000/api/download/{job_id}_full.mid  # Full MIDI
+curl http://localhost:8000/api/download/{job_id}_part_0.mp3  # Individual stems
+
+# Get alignment data (time → measure/beat mappings)
+curl http://localhost:8000/api/alignment/{job_id}
 ```
 
 ### Using Python
@@ -177,6 +186,7 @@ When you run `docker-compose up --build`:
 
 1. **Audiveris Container**:
    - Downloads Java 25 JDK
+   - Installs Tesseract OCR for text recognition
    - Copies Audiveris source from `audiveris-5.10.2/`
    - Builds Audiveris using Gradle
    - Creates wrapper script for easy execution
@@ -184,9 +194,22 @@ When you run `docker-compose up --build`:
 
 2. **API Container**:
    - Python 3.11
-   - FastAPI + all dependencies
-   - Connects to Audiveris container
-   - **Size**: ~500MB
+   - FastAPI + all dependencies (music21, aiofiles, etc.)
+   - Docker CLI for inter-container communication
+   - FluidSynth + soundfonts for MIDI synthesis
+   - FFmpeg for audio format conversion
+   - Connects to Audiveris container via docker exec
+   - **Size**: ~800MB
+
+## Features
+
+The API provides a complete music transcription and audio pipeline:
+
+1. **PDF → MusicXML**: Optical Music Recognition using Audiveris
+2. **MusicXML → MIDI**: Note conversion using music21
+3. **MIDI → MP3**: Audio synthesis using FluidSynth + FFmpeg
+4. **Stem Extraction**: Individual part/instrument tracks
+5. **Alignment Data**: Time → measure/beat mappings for synchronization
 
 ## Troubleshooting
 

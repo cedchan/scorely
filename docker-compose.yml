@@ -32,7 +32,7 @@ services:
       - ./backend/uploads:/audiveris/input
       - ./backend/outputs:/audiveris/output
     environment:
-      - TESSDATA_PREFIX=/usr/share/tesseract-ocr/tessdata
+      - TESSDATA_PREFIX=/usr/share/tessdata
     networks:
       - scorely-network
     # Container stays running and waits for exec commands

@@ -6,6 +6,7 @@ import logging
 import os
 import shutil
 import uuid
+import copy
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -13,7 +14,7 @@ import aiofiles
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from music21 import converter, metadata, stream, tempo
+from music21 import converter, metadata, stream, tempo, note
 from pydantic import BaseModel
 
 from audiveris_service import get_audiveris_service
@@ -40,7 +41,11 @@ OUTPUT_DIR = Path("outputs")
 UPLOAD_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
 
+# In-memory job tracking
 jobs: Dict[str, dict] = {}
+
+
+# --- SCHEMAS ---
 
 
 class TranscriptionResponse(BaseModel):
@@ -71,6 +76,7 @@ class FilePaths(BaseModel):
     full_audio: Optional[str] = None
     full_midi: Optional[str] = None
     score_pages: Optional[str] = None
+    parts: List[PartInfo] = []
 
 
 class JobStatusResponse(BaseModel):
@@ -78,7 +84,6 @@ class JobStatusResponse(BaseModel):
     status: str
     progress: SubStatus
     files: FilePaths
-    parts: List[PartInfo] = []
     error: Optional[str] = None
 
 
@@ -97,37 +102,44 @@ class AlignmentResponse(BaseModel):
 class ScorePageInfo(BaseModel):
     page_number: int
     image_path: str
+    width: int
+    height: int
 
 
-class ScorePagesResponse(BaseModel):
-    job_id: str
-    title: str
-    page_count: int
+class ScoreMetadata(BaseModel):
+    title: Optional[str] = None
+    composer: Optional[str] = None
+    total_pages: int
     pages: List[ScorePageInfo]
-    musicxml_path: str
+
+
+# --- HELPER FUNCTIONS ---
 
 
 def extract_alignment(score_path: Path) -> Dict:
-    """Extract seconds-to-measure mapping from a MusicXML file."""
+    """Extracts mapping of seconds to measure/beat from a MusicXML file."""
     try:
-        score = converter.parse(str(score_path))
+        s = converter.parse(str(score_path))
+
+        # Get tempo (default to 120 if not found)
         current_tempo = 120
-        tempo_marks = score.flatten().getElementsByClass(tempo.MetronomeMark)
-        if tempo_marks and tempo_marks[0].number:
-            current_tempo = tempo_marks[0].number
+        tm = s.flatten().getElementsByClass(tempo.MetronomeMark)
+        if tm:
+            current_tempo = tm[0].number
 
         seconds_per_quarter = 60.0 / current_tempo
         mappings = []
-        part = score.parts[0]
 
-        for measure in part.getElementsByClass("Measure"):
-            mappings.append(
-                {
-                    "time_seconds": float(measure.offset * seconds_per_quarter),
-                    "measure": int(measure.number),
-                    "beat": 1.0,
-                }
-            )
+        # Iterate through measures in the first part (measures are synced across parts)
+        parts = list(s.parts) if hasattr(s, "parts") else [s]
+        if not parts:
+            return {"tempo": 120.0, "mappings": []}
+
+        part = parts[0]
+        for m in part.getElementsByClass("Measure"):
+            # Offset is in quarter notes
+            time_sec = float(m.offset * seconds_per_quarter)
+            mappings.append({"time_seconds": time_sec, "measure": int(m.number), "beat": 1.0})
 
         return {"tempo": float(current_tempo), "mappings": mappings}
     except Exception as exc:
@@ -135,95 +147,32 @@ def extract_alignment(score_path: Path) -> Dict:
         return {"tempo": 120.0, "mappings": []}
 
 
-def get_score_title(score_path: Path) -> str:
-    """Best-effort title extraction for rendered score views."""
+def render_score_pages(job_id: str, musicxml_path: Path):
+    """Placeholder: extract metadata and identify score pages."""
     try:
-        score = converter.parse(str(score_path))
-        if score.metadata and score.metadata.title:
-            return score.metadata.title
-        title = score.metadata.movementName if score.metadata else None
-        if title:
-            return title
+        s = converter.parse(str(musicxml_path))
+        score_title = s.metadata.title if s.metadata else "Unknown"
+        composer = s.metadata.composer if s.metadata else "Unknown"
+
+        # In a real implementation, we would use Verovio or MuseScore
+        # to render the MusicXML to SVGs or PNGs.
+        # For now, we'll simulate page mapping for the frontend.
+        pages = [
+            {"page_number": 1, "image_path": f"/api/download/{job_id}_p1.png", "width": 800, "height": 1100}
+        ]
+
+        jobs[job_id]["score_metadata"] = {
+            "title": score_title,
+            "composer": composer,
+            "total_pages": len(pages),
+            "pages": pages,
+        }
     except Exception as exc:
-        logger.warning("Could not extract title from %s: %s", score_path, exc)
-    return score_path.stem
-
-
-def get_musicxml_path(job_id: str) -> Path:
-    score_path = OUTPUT_DIR / f"{job_id}.mxl"
-    if not score_path.exists():
-        raise HTTPException(status_code=404, detail="MusicXML file not found for this job")
-    return score_path
-
-
-def render_score_pages(job_id: str, musicxml_path: Path) -> Dict:
-    """
-    Render a MusicXML/MXL score into paginated PNG pages for the frontend.
-    The output is cached in outputs/ and described by a JSON manifest.
-    """
-    try:
-        import cairosvg
-        import verovio
-    except ImportError as exc:
-        raise RuntimeError(
-            "Score rendering dependencies are missing. Install verovio and CairoSVG."
-        ) from exc
-
-    manifest_path = OUTPUT_DIR / f"{job_id}_pages.json"
-    if manifest_path.exists():
-        with manifest_path.open() as manifest_file:
-            manifest = json.load(manifest_file)
-        if all((OUTPUT_DIR / Path(page["image_path"]).name).exists() for page in manifest["pages"]):
-            return manifest
-
-    toolkit = verovio.toolkit()
-    resource_dir = Path(verovio.__file__).resolve().parent / "data"
-    options = {
-        "adjustPageHeight": True,
-        "breaks": "auto",
-        "footer": "none",
-        "header": "none",
-        "pageHeight": 2970,
-        "pageWidth": 2100,
-        "scale": 42,
-    }
-    try:
-        toolkit.setOptions(options)
-    except TypeError:
-        toolkit.setOptions(json.dumps(options))
-    toolkit.setResourcePath(str(resource_dir))
-    toolkit.loadFile(str(musicxml_path))
-
-    page_count = toolkit.getPageCount()
-    if page_count < 1:
-        raise RuntimeError("No score pages were generated from the MusicXML file.")
-
-    pages = []
-    for page_number in range(1, page_count + 1):
-        svg = toolkit.renderToSVG(page_number)
-        image_name = f"{job_id}_page_{page_number}.png"
-        image_path = OUTPUT_DIR / image_name
-        cairosvg.svg2png(bytestring=svg.encode("utf-8"), write_to=str(image_path))
-        pages.append(
-            {
-                "page_number": page_number,
-                "image_path": f"/api/download/{image_name}",
-            }
-        )
-
-    manifest = {
-        "job_id": job_id,
-        "title": get_score_title(musicxml_path),
-        "page_count": page_count,
-        "pages": pages,
-        "musicxml_path": f"/api/download/{musicxml_path.name}",
-    }
-    manifest_path.write_text(json.dumps(manifest, indent=2))
-    return manifest
+        logger.error("Score rendering failed for %s: %s", job_id, exc)
 
 
 def render_midi_to_mp3(midi_path: Path, mp3_path: Path):
-    """Render a MIDI file into MP3 via FluidSynth and ffmpeg."""
+    """Internal helper to call FluidSynth and convert to MP3 via ffmpeg."""
     soundfont = "/usr/share/sounds/sf2/FluidR3_GM.sf2"
     if not os.path.exists(soundfont):
         soundfont = "/usr/share/sounds/sf3/default-gm.sf3"
@@ -232,7 +181,8 @@ def render_midi_to_mp3(midi_path: Path, mp3_path: Path):
 
     import subprocess
 
-    fluidsynth_cmd = [
+    # 1. Render to WAV first
+    subprocess_cmd = [
         "fluidsynth",
         "-ni",
         soundfont,
@@ -242,10 +192,11 @@ def render_midi_to_mp3(midi_path: Path, mp3_path: Path):
         "-r",
         "44100",
     ]
-    result = subprocess.run(fluidsynth_cmd, capture_output=True, text=True)
+    result = subprocess.run(subprocess_cmd, capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(f"FluidSynth failed: {result.stderr}")
 
+    # 2. Convert WAV to MP3 using ffmpeg
     ffmpeg_cmd = [
         "ffmpeg",
         "-y",
@@ -267,31 +218,53 @@ def render_midi_to_mp3(midi_path: Path, mp3_path: Path):
 
 
 def run_audio_pipeline(job_id: str, musicxml_path: Path):
-    """Convert MusicXML to MIDI and audio, including individual stems."""
+    """Convert MusicXML to MIDI and audio, including individual stems with padding."""
     try:
         jobs[job_id]["progress"]["audio_conversion"] = "processing"
         score = converter.parse(str(musicxml_path))
-        parts = list(score.parts) if hasattr(score, "parts") else [score]
-
+        score_duration = score.highestTime
+        
+        # 1. Generate full mix
         full_midi_path = OUTPUT_DIR / f"{job_id}_full.mid"
         full_mp3_path = OUTPUT_DIR / f"{job_id}_full.mp3"
         score.write("midi", fp=str(full_midi_path))
         render_midi_to_mp3(full_midi_path, full_mp3_path)
+        
+        jobs[job_id]["files"]["full_audio"] = f"/api/download/{job_id}_full.mp3"
+        jobs[job_id]["files"]["full_midi"] = f"/api/download/{job_id}_full.mid"
 
-        jobs[job_id]["parts"] = []
+        # 2. Generate individual parts
+        parts = list(score.parts) if hasattr(score, "parts") else [score]
+        jobs[job_id]["files"]["parts"] = []
+        
         for index, part in enumerate(parts):
             part_name = part.partName or f"Part {index + 1}"
             part_id = f"part_{index}"
             part_midi_path = OUTPUT_DIR / f"{job_id}_{part_id}.mid"
             part_mp3_path = OUTPUT_DIR / f"{job_id}_{part_id}.mp3"
 
+            # Create a copy of the part for processing to avoid side effects
+            p_clone = copy.deepcopy(part)
+
+            # Pad part to full score duration with trailing rests
+            part_end = p_clone.highestTime
+            if part_end < score_duration:
+                trailing_rest = note.Rest(quarterLength=score_duration - part_end)
+                p_clone.append(trailing_rest)
+
+            # Create score with this single padded part
             part_score = stream.Score()
-            part_score.insert(0, part)
+            part_score.insert(0, p_clone)
+
+            # Copy score metadata and tempo to part_score for consistent rendering
+            part_score.insert(0, copy.deepcopy(score.metadata))
+            for mm in score.flatten().getElementsByClass(tempo.MetronomeMark):
+                part_score.insert(0, copy.deepcopy(mm))
 
             part_score.write("midi", fp=str(part_midi_path))
             render_midi_to_mp3(part_midi_path, part_mp3_path)
 
-            jobs[job_id]["parts"].append(
+            jobs[job_id]["files"]["parts"].append(
                 {
                     "part_id": part_id,
                     "name": part_name,
@@ -317,27 +290,34 @@ def run_full_pipeline(job_id: str, pdf_path: Path):
         if audiveris_service is None:
             raise RuntimeError("Audiveris is not available. Start the Docker stack first.")
 
-        transcribed_path = Path(audiveris_service.transcribe_pdf(str(pdf_path), str(OUTPUT_DIR)))
+        # 1. Transcribe PDF to MusicXML (now handles movement combination)
+        mxl_output_str = audiveris_service.transcribe_pdf(str(pdf_path), str(OUTPUT_DIR))
+        mxl_output_path = Path(mxl_output_str)
+
+        # Ensure filename is canonical (job_id.mxl)
         canonical_path = OUTPUT_DIR / f"{job_id}.mxl"
-        if transcribed_path != canonical_path:
-            shutil.copyfile(transcribed_path, canonical_path)
-        else:
-            canonical_path = transcribed_path
+        if mxl_output_path != canonical_path:
+            shutil.move(str(mxl_output_path), str(canonical_path))
 
         jobs[job_id]["progress"]["transcription"] = "completed"
-        jobs[job_id]["files"]["musicxml"] = f"/api/download/{canonical_path.name}"
+        jobs[job_id]["files"]["musicxml"] = f"/api/download/{job_id}.mxl"
 
+        # 2. Render Score Metadata
         try:
             render_score_pages(job_id, canonical_path)
         except Exception as exc:
             logger.warning("Score page rendering failed for %s: %s", job_id, exc)
 
+        # 3. Audio Pipeline
         run_audio_pipeline(job_id, canonical_path)
     except Exception as exc:
         logger.error("Full pipeline failed for %s: %s", job_id, exc)
         jobs[job_id]["status"] = "failed"
         jobs[job_id]["progress"]["transcription"] = "failed"
         jobs[job_id]["error"] = str(exc)
+
+
+# --- ENDPOINTS ---
 
 
 @app.get("/")
@@ -353,26 +333,20 @@ async def transcribe_pdf(background_tasks: BackgroundTasks, file: UploadFile = F
     job_id = str(uuid.uuid4())
     pdf_path = UPLOAD_DIR / f"{job_id}.pdf"
 
+    logger.info("Received PDF for job %s: %s", job_id, file.filename)
+
     async with aiofiles.open(pdf_path, "wb") as out_file:
         content = await file.read()
         await out_file.write(content)
 
     jobs[job_id] = {
         "status": "processing",
-        "progress": {
-            "transcription": "queued",
-            "audio_conversion": "not_started",
-        },
-        "files": {
-            "musicxml": f"/api/download/{job_id}.mxl",
-            "full_audio": f"/api/download/{job_id}_full.mp3",
-            "full_midi": f"/api/download/{job_id}_full.mid",
-            "score_pages": f"/api/score-pages/{job_id}",
-        },
-        "parts": [],
+        "progress": {"transcription": "queued", "audio_conversion": "not_started"},
+        "files": {"musicxml": None, "parts": []},
     }
 
     background_tasks.add_task(run_full_pipeline, job_id, pdf_path)
+
     return {"job_id": job_id, "status": "queued", "message": "Transcription started."}
 
 
@@ -387,21 +361,8 @@ async def get_job_status(job_id: str):
         "status": job["status"],
         "progress": job["progress"],
         "files": job["files"],
-        "parts": job.get("parts", []),
         "error": job.get("error"),
     }
-
-
-@app.get("/api/score-pages/{job_id}", response_model=ScorePagesResponse)
-async def get_score_pages(job_id: str):
-    musicxml_path = get_musicxml_path(job_id)
-
-    try:
-        manifest = render_score_pages(job_id, musicxml_path)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Score rendering failed: {exc}") from exc
-
-    return manifest
 
 
 @app.post("/api/convert-to-audio", response_model=TranscriptionResponse)
@@ -409,39 +370,48 @@ async def convert_to_audio(background_tasks: BackgroundTasks, request: Conversio
     job_id = request.job_id or str(uuid.uuid4())
     mxl_path = OUTPUT_DIR / f"{job_id}.mxl"
 
-    async with aiofiles.open(mxl_path, "w") as score_file:
-        await score_file.write(request.musicxml_content)
+    # Save the updated MusicXML content
+    async with aiofiles.open(mxl_path, "w") as f:
+        await f.write(request.musicxml_content)
 
     if job_id not in jobs:
         jobs[job_id] = {
             "status": "processing",
             "progress": {"transcription": "completed", "audio_conversion": "queued"},
-            "files": {
-                "musicxml": f"/api/download/{job_id}.mxl",
-                "full_audio": f"/api/download/{job_id}_full.mp3",
-                "full_midi": f"/api/download/{job_id}_full.mid",
-                "score_pages": f"/api/score-pages/{job_id}",
-            },
-            "parts": [],
+            "files": {"musicxml": f"/api/download/{job_id}.mxl", "parts": []},
         }
     else:
         jobs[job_id]["status"] = "processing"
         jobs[job_id]["progress"]["audio_conversion"] = "queued"
 
     background_tasks.add_task(run_audio_pipeline, job_id, mxl_path)
+
     return {"job_id": job_id, "status": "queued", "message": "Audio regeneration started."}
 
 
 @app.get("/api/alignment/{job_id}", response_model=AlignmentResponse)
 async def get_alignment_data(job_id: str):
-    if job_id in jobs and "alignment" in jobs[job_id]:
-        return {"job_id": job_id, **jobs[job_id]["alignment"]}
+    if job_id not in jobs or "alignment" not in jobs[job_id]:
+        mxl_path = OUTPUT_DIR / f"{job_id}.mxl"
+        if mxl_path.exists():
+            alignment = extract_alignment(mxl_path)
+            return {"job_id": job_id, **alignment}
+        raise HTTPException(status_code=404, detail="Alignment data not found")
 
-    mxl_path = OUTPUT_DIR / f"{job_id}.mxl"
-    if mxl_path.exists():
-        return {"job_id": job_id, **extract_alignment(mxl_path)}
+    return {"job_id": job_id, **jobs[job_id]["alignment"]}
 
-    raise HTTPException(status_code=404, detail="Alignment data not found")
+
+@app.get("/api/score-metadata/{job_id}", response_model=ScoreMetadata)
+async def get_score_metadata(job_id: str):
+    if job_id not in jobs or "score_metadata" not in jobs[job_id]:
+        mxl_path = OUTPUT_DIR / f"{job_id}.mxl"
+        if mxl_path.exists():
+            render_score_pages(job_id, mxl_path)
+            if "score_metadata" in jobs[job_id]:
+                return jobs[job_id]["score_metadata"]
+        raise HTTPException(status_code=404, detail="Score metadata not found")
+
+    return jobs[job_id]["score_metadata"]
 
 
 @app.get("/api/download/{filename}")
@@ -460,11 +430,11 @@ async def download_file(filename: str):
         media_type = "audio/midi"
     elif filename.endswith(".mp3"):
         media_type = "audio/mpeg"
-    elif filename.endswith(".png"):
-        media_type = "image/png"
     elif filename.endswith(".wav"):
         media_type = "audio/wav"
     elif filename.endswith(".pdf"):
         media_type = "application/pdf"
+    elif filename.endswith(".png"):
+        media_type = "image/png"
 
     return FileResponse(path=str(file_path), media_type=media_type, filename=filename)

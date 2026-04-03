@@ -13,6 +13,9 @@ RUN apt-get update && apt-get install -y \
     tesseract-ocr \
     tesseract-ocr-eng \
     libtesseract-dev \
+    && mkdir -p /usr/share/tessdata \
+    && curl -L https://github.com/tesseract-ocr/tessdata/raw/main/eng.traineddata -o /usr/share/tessdata/eng.traineddata \
+    && curl -L https://github.com/tesseract-ocr/tessdata/raw/main/osd.traineddata -o /usr/share/tessdata/osd.traineddata \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy all source files
@@ -43,7 +46,7 @@ RUN mkdir -p /audiveris/input /audiveris/output
 # We'll create a simple wrapper script to run it
 
 RUN echo '#!/bin/bash\n\
-/audiveris/app/build/install/app/bin/Audiveris "$@"' > /usr/local/bin/audiveris \
+JAVA_OPTS="-Xmx4g" /audiveris/app/build/install/app/bin/Audiveris "$@"' > /usr/local/bin/audiveris \
     && chmod +x /usr/local/bin/audiveris
 
 # Default command - wait for requests

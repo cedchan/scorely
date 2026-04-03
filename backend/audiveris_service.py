@@ -5,7 +5,11 @@ Handles PDF to MusicXML conversion using Audiveris
 import os
 import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
+import logging
+from music21 import converter, stream
+
+logger = logging.getLogger(__name__)
 
 class AudiverisService:
     """Wrapper for Audiveris OMR engine"""
@@ -70,8 +74,10 @@ class AudiverisService:
             container_output = "/audiveris/output"
 
             cmd = [
-                'docker', 'exec', 'scorely-audiveris',
-                'audiveris',  # wrapper script we created
+                'docker', 'exec', 
+                '-e', 'JAVA_OPTS=-Xmx4g',
+                'scorely-audiveris',
+                'audiveris',
                 '-batch',
                 '-export',
                 container_pdf,
@@ -106,7 +112,7 @@ class AudiverisService:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=300  # 5 minute timeout
+                timeout=600  # 10 minute timeout
             )
 
             if result.returncode != 0:
@@ -114,30 +120,77 @@ class AudiverisService:
                     f"Audiveris failed: {result.stderr}"
                 )
 
-            # Find the generated MusicXML file for this specific upload.
-            # Audiveris sometimes exports `<stem>.mxl`, and other times it exports
-            # movement files such as `<stem>.mvt1.mxl`, `<stem>.mvt2.mxl`, etc.
-            expected_output = output_dir / f"{pdf_path.stem}.mxl"
+            # Search for generated .mxl files
+            # Audiveris might create file.mxl OR file.mvt1.mxl, file.mvt2.mxl, etc.
+            mxl_files = sorted(list(output_dir.glob(f"{pdf_path.stem}*.mxl")))
+            
+            if not mxl_files:
+                # Fallback: search for any .mxl if stem-based search fails
+                mxl_files = sorted(list(output_dir.glob("*.mxl")))
+                
+            if not mxl_files:
+                raise FileNotFoundError(f"No MusicXML output found in {output_dir}")
 
-            if expected_output.exists():
-                return str(expected_output)
-
-            matching_mxl_files = sorted(output_dir.glob(f"{pdf_path.stem}*.mxl"))
-            if matching_mxl_files:
-                return str(matching_mxl_files[0])
-
-            raise FileNotFoundError(
-                f"No MusicXML output found for {pdf_path.stem} in {output_dir}"
-            )
+            # If multiple movements, combine them
+            if len(mxl_files) > 1:
+                logger.info(f"Combining {len(mxl_files)} movements for {pdf_path.name}")
+                combined_score = self._combine_mxl_files(mxl_files)
+                final_mxl = output_dir / f"{pdf_path.stem}.mxl"
+                combined_score.write('musicxml', fp=str(final_mxl))
+                return str(final_mxl)
+            
+            return str(mxl_files[0])
 
         except subprocess.TimeoutExpired:
             raise TimeoutError(
-                "Audiveris processing timed out (>5 minutes)"
+                "Audiveris processing timed out (>10 minutes)"
             )
         except Exception as e:
             raise RuntimeError(
                 f"Failed to run Audiveris: {str(e)}"
             )
+
+    def _combine_mxl_files(self, mxl_paths: List[Path]) -> stream.Score:
+        """Combines multiple MusicXML files into a single Score object."""
+        if not mxl_paths:
+            return stream.Score()
+            
+        combined_score = converter.parse(str(mxl_paths[0]))
+        
+        for mxl_path in mxl_paths[1:]:
+            next_score = converter.parse(str(mxl_path))
+            
+            # Match parts by index and append measures
+            for i, part in enumerate(next_score.parts):
+                if i < len(combined_score.parts):
+                    # Append all measures from this movement to the combined part
+                    for measure in part.getElementsByClass('Measure'):
+                        combined_score.parts[i].append(measure)
+                else:
+                    logger.warning(f"Movement {mxl_path.name} has more parts ({i+1}) than the first movement.")
+                    
+        return combined_score
+
+    def _combine_mxl_files(self, mxl_paths: List[Path]) -> stream.Score:
+        """Combines multiple MusicXML files into a single Score object."""
+        if not mxl_paths:
+            return stream.Score()
+            
+        combined_score = converter.parse(str(mxl_paths[0]))
+        
+        for mxl_path in mxl_paths[1:]:
+            next_score = converter.parse(str(mxl_path))
+            
+            # Match parts by index and append measures
+            for i, part in enumerate(next_score.parts):
+                if i < len(combined_score.parts):
+                    # Append all measures from this movement to the combined part
+                    for measure in part.getElementsByClass('Measure'):
+                        combined_score.parts[i].append(measure)
+                else:
+                    logger.warning(f"Movement {mxl_path.name} has more parts ({i+1}) than the first movement.")
+                    
+        return combined_score
 
 
 # Singleton instance
