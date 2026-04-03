@@ -59,6 +59,10 @@ class ConversionRequest(BaseModel):
     musicxml_content: str
     job_id: Optional[str] = None
 
+class SubStatus(BaseModel):
+    transcription: str
+    audio_conversion: str
+
 class PartInfo(BaseModel):
     part_id: str
     name: str
