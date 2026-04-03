@@ -3,206 +3,158 @@ Scorely API - Backend for sheet music transcription and conversion
 """
 import os
 import uuid
-import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Dict
 
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import aiofiles
-
-from audiveris_service import get_audiveris_service
 
 # Initialize FastAPI app
 app = FastAPI(
     title="Scorely API",
-    description="Sheet music transcription and conversion API",
-    version="1.0.0"
+    description="""
+    API for transcribing sheet music (PDF) to MusicXML and converting to Audio/MIDI.
+    
+    ### UI Workflow:
+    1. **Initial Upload**: Use `/api/transcribe` with a PDF. It returns a `job_id`.
+    2. **Polling**: Poll `/api/status/{job_id}`. 
+       - When `transcription` is 'completed', you can download the MusicXML and render the score.
+       - When `audio_conversion` is 'completed', you can enable playback.
+    3. **Editing**: If the user edits the MusicXML, use `/api/convert-to-audio` with the updated XML.
+    4. **Playback Sync**: Use `/api/alignment/{job_id}` to get the mapping for the scrolling cursor.
+    """,
+    version="1.1.0"
 )
 
 # Enable CORS for React Native app
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify your frontend domain
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Directories
-UPLOAD_DIR = Path("uploads")
-OUTPUT_DIR = Path("outputs")
-UPLOAD_DIR.mkdir(exist_ok=True)
-OUTPUT_DIR.mkdir(exist_ok=True)
-
-# Pydantic models
-class ConversionRequest(BaseModel):
-    musicxml_path: str
+# --- SCHEMAS ---
 
 class TranscriptionResponse(BaseModel):
-    status: str
     job_id: str
-    musicxml_path: str
-    message: Optional[str] = None
+    status: str  # 'queued'
+    message: str
 
-class MidiConversionResponse(BaseModel):
-    status: str
-    midi_path: str
-    message: Optional[str] = None
+class ConversionRequest(BaseModel):
+    """Used when a user edits MusicXML and needs new audio/alignment."""
+    musicxml_content: str  # The updated MusicXML string
+    job_id: Optional[str] = None # Optional: associate with an existing job
 
+class SubStatus(BaseModel):
+    transcription: str  # 'queued', 'processing', 'completed', 'failed', 'not_started'
+    audio_conversion: str
+
+class FilePaths(BaseModel):
+    musicxml: Optional[str] = None
+    audio: Optional[str] = None
+    midi: Optional[str] = None
+
+class JobStatusResponse(BaseModel):
+    job_id: str
+    status: str # 'processing', 'completed', 'failed'
+    progress: SubStatus
+    files: FilePaths
+    error: Optional[str] = None
+
+class AlignmentPoint(BaseModel):
+    time_seconds: float
+    measure: int
+    beat: float
+
+class AlignmentResponse(BaseModel):
+    job_id: str
+    tempo: float
+    mappings: List[AlignmentPoint]
+
+# --- ENDPOINTS ---
 
 @app.get("/")
 async def root():
     """Health check endpoint"""
-    return {
-        "status": "running",
-        "service": "Scorely API",
-        "version": "1.0.0"
-    }
-
+    return {"status": "running", "service": "Scorely API"}
 
 @app.post("/api/transcribe", response_model=TranscriptionResponse)
-async def transcribe_pdf(file: UploadFile = File(...)):
+async def transcribe_pdf(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     """
-    Upload a PDF file and transcribe it to MusicXML using Audiveris OMR.
+    **Initial Entry Point.**
+    Takes a PDF, returns a Job ID. Starts the OMR -> Audio pipeline.
+    UI should immediately start polling /api/status/{job_id}.
     """
-    if not file.filename.endswith('.pdf'):
-        raise HTTPException(status_code=400, detail="Only PDF files are supported")
-
-    # Generate unique job ID
     job_id = str(uuid.uuid4())
+    # TODO: Save PDF and trigger background_tasks.add_task(...)
+    return {
+        "job_id": job_id,
+        "status": "queued",
+        "message": "PDF received. OMR and Audio pipeline started."
+    }
 
-    # Save uploaded PDF
-    pdf_path = UPLOAD_DIR / f"{job_id}.pdf"
-    async with aiofiles.open(pdf_path, 'wb') as out_file:
-        content = await file.read()
-        await out_file.write(content)
-
-    # Try to use Audiveris for transcription
-    audiveris = get_audiveris_service()
-
-    if audiveris:
-        try:
-            # Run Audiveris transcription
-            musicxml_path = audiveris.transcribe_pdf(
-                str(pdf_path),
-                str(OUTPUT_DIR)
-            )
-
-            return TranscriptionResponse(
-                status="success",
-                job_id=job_id,
-                musicxml_path=musicxml_path,
-                message="PDF successfully transcribed to MusicXML using Audiveris"
-            )
-        except Exception as e:
-            # If Audiveris fails, return error but keep the uploaded PDF
-            raise HTTPException(
-                status_code=500,
-                detail=f"Audiveris transcription failed: {str(e)}"
-            )
-    else:
-        # Audiveris not available - return placeholder
-        musicxml_path = f"outputs/{job_id}.mxl"
-
-        return TranscriptionResponse(
-            status="success",
-            job_id=job_id,
-            musicxml_path=musicxml_path,
-            message="PDF uploaded. Audiveris not configured - please install Audiveris or use Docker setup."
-        )
-
-
-@app.post("/api/convert-to-midi", response_model=MidiConversionResponse)
-async def convert_to_midi(request: ConversionRequest):
+@app.get("/api/status/{job_id}", response_model=JobStatusResponse)
+async def get_job_status(job_id: str):
     """
-    Convert MusicXML file to MIDI using music21.
+    **Polling Endpoint.**
+    Returns the granular status of the transcription and audio conversion.
+    UI can render the MusicXML as soon as 'transcription' is 'completed'.
     """
-    try:
-        from music21 import converter
+    # TODO: Fetch status from DB/Cache
+    return {
+        "job_id": job_id,
+        "status": "processing",
+        "progress": {
+            "transcription": "processing",
+            "audio_conversion": "not_started"
+        },
+        "files": {
+            "musicxml": None,
+            "audio": None,
+            "midi": None
+        }
+    }
 
-        musicxml_path = Path(request.musicxml_path)
+@app.post("/api/convert-to-audio", response_model=TranscriptionResponse)
+async def convert_to_audio(background_tasks: BackgroundTasks, request: ConversionRequest):
+    """
+    **Edit Entry Point.**
+    Takes edited MusicXML, returns a Job ID. 
+    Triggers regeneration of MIDI, Audio, and Alignment map.
+    """
+    job_id = request.job_id or str(uuid.uuid4())
+    # TODO: Save updated XML and trigger conversion task
+    return {
+        "job_id": job_id,
+        "status": "queued",
+        "message": "Regenerating audio for edited score."
+    }
 
-        if not musicxml_path.exists():
-            raise HTTPException(status_code=404, detail="MusicXML file not found")
-
-        # Parse MusicXML
-        score = converter.parse(str(musicxml_path))
-
-        # Generate MIDI path
-        midi_path = musicxml_path.with_suffix('.mid')
-
-        # Write MIDI file
-        score.write('midi', fp=str(midi_path))
-
-        return MidiConversionResponse(
-            status="success",
-            midi_path=str(midi_path),
-            message="Successfully converted MusicXML to MIDI"
-        )
-
-    except ImportError:
-        raise HTTPException(
-            status_code=500,
-            detail="music21 library not installed. Run: pip install music21"
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Conversion failed: {str(e)}")
-
+@app.get("/api/alignment/{job_id}", response_model=AlignmentResponse)
+async def get_alignment_data(job_id: str):
+    """
+    **Sync Data.**
+    Returns the seconds-to-measure/beat mapping for the scrolling cursor.
+    """
+    # TODO: Extract timestamps using music21
+    return {
+        "job_id": job_id,
+        "tempo": 120.0,
+        "mappings": [
+            {"time_seconds": 0.0, "measure": 1, "beat": 1.0},
+            {"time_seconds": 2.5, "measure": 2, "beat": 1.0}
+        ]
+    }
 
 @app.get("/api/download/{filename}")
 async def download_file(filename: str):
     """
-    Download generated MusicXML or MIDI files.
+    **Asset Fetching.**
+    Serves the actual .mxl, .mid, or .wav files to the UI.
     """
-    file_path = OUTPUT_DIR / filename
-
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="File not found")
-
-    # Determine media type
-    media_type = "application/octet-stream"
-    if filename.endswith('.mxl'):
-        media_type = "application/vnd.recordare.musicxml"
-    elif filename.endswith('.mid') or filename.endswith('.midi'):
-        media_type = "audio/midi"
-
-    return FileResponse(
-        path=str(file_path),
-        media_type=media_type,
-        filename=filename
-    )
-
-
-@app.get("/api/status/{job_id}")
-async def get_job_status(job_id: str):
-    """
-    Check the status of a transcription job.
-    """
-    # Check if files exist
-    pdf_path = UPLOAD_DIR / f"{job_id}.pdf"
-    mxl_path = OUTPUT_DIR / f"{job_id}.mxl"
-    midi_path = OUTPUT_DIR / f"{job_id}.mid"
-
-    status = {
-        "job_id": job_id,
-        "pdf_uploaded": pdf_path.exists(),
-        "musicxml_ready": mxl_path.exists(),
-        "midi_ready": midi_path.exists(),
-    }
-
-    if mxl_path.exists():
-        status["status"] = "completed"
-    elif pdf_path.exists():
-        status["status"] = "processing"
-    else:
-        status["status"] = "not_found"
-
-    return status
-
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # TODO: Serve file from outputs directory
+    return {"message": "File streaming placeholder"}

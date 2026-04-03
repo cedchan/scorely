@@ -3,3 +3,4 @@ uvicorn[standard]==0.32.0
 python-multipart==0.0.17
 music21==9.1.0
 aiofiles==24.1.0
+midi2audio==0.1.1
