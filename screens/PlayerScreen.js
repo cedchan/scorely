@@ -19,6 +19,7 @@ import {
   faMusic,
   faPause,
   faPlay,
+  faShare,
 } from '@fortawesome/free-solid-svg-icons';
 import AnnotationLayer from '../components/AnnotationLayer';
 import AnnotationToolbar from '../components/AnnotationToolbar';
@@ -67,6 +68,7 @@ export default function PlayerScreen({ route }) {
   const [userId] = useState(
     () => `user-${Math.random().toString(36).slice(2, 11)}`
   );
+  const [shareCode, setShareCode] = useState(null);
 
   const jobId = route.params?.jobId;
   const apiBaseUrl = route.params?.apiBaseUrl || getFallbackApiBaseUrl();
@@ -409,6 +411,31 @@ export default function PlayerScreen({ route }) {
     );
   };
 
+  const handleShare = async () => {
+    if (!jobId) {
+      alert('Cannot share: No job ID available');
+      return;
+    }
+
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/share/${jobId}`, {
+        method: 'POST',
+      });
+      const data = await response.json();
+
+      if (response.ok) {
+        setShareCode(data.share_code);
+        if (Platform.OS === 'web') {
+          alert(`Share this code with friends:\n\n${data.share_code}\n\nThey can enter it on the home page to view this score together!`);
+        }
+      } else {
+        alert(`Failed to generate share code: ${data.detail || 'Unknown error'}`);
+      }
+    } catch (error) {
+      alert(`Error generating share code: ${error.message}`);
+    }
+  };
+
   if (!fontsLoaded) {
     return null;
   }
@@ -440,10 +467,21 @@ export default function PlayerScreen({ route }) {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.headerCard}>
-        <Text style={styles.scoreTitle}>{title}</Text>
-        <Text style={styles.scoreSubtitle}>
-          Read the score in portrait and swipe between paginated pages.
-        </Text>
+        <View style={styles.headerTitleRow}>
+          <View style={styles.headerTitleWrap}>
+            <Text style={styles.scoreTitle}>{title}</Text>
+            <Text style={styles.scoreSubtitle}>
+              Read the score in portrait and swipe between paginated pages.
+            </Text>
+          </View>
+          <TouchableOpacity
+            style={styles.shareButton}
+            onPress={handleShare}
+          >
+            <FontAwesomeIcon icon={faShare} size={18} color={COLORS.darkBrown} />
+            <Text style={styles.shareButtonText}>Share</Text>
+          </TouchableOpacity>
+        </View>
         <View style={styles.audioRow}>
           {Platform.OS === 'web' && playbackUrl ? (
             <audio
@@ -650,6 +688,15 @@ const styles = StyleSheet.create({
     backgroundColor: '#F2ECE2',
     borderRadius: 14,
   },
+  headerTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    marginBottom: 14,
+  },
+  headerTitleWrap: {
+    flex: 1,
+  },
   scoreTitle: {
     fontFamily: 'Afacad_400Regular',
     fontSize: 28,
@@ -660,6 +707,21 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: COLORS.lightBrown,
     marginTop: 6,
+  },
+  shareButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: COLORS.beige,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+    marginLeft: 12,
+  },
+  shareButtonText: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 16,
+    color: COLORS.darkBrown,
   },
   audioRow: {
     marginTop: 14,

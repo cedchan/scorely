@@ -15,7 +15,7 @@ import {
 import { useFonts, Afacad_400Regular } from '@expo-google-fonts/afacad';
 import Constants from 'expo-constants';
 import { FontAwesomeIcon } from '@fortawesome/react-native-fontawesome';
-import { faCheckCircle, faClock, faFileMusic, faUpload } from '@fortawesome/free-solid-svg-icons';
+import { faCheckCircle, faClock, faFileMusic, faUpload, faUserPlus } from '@fortawesome/free-solid-svg-icons';
 import * as DocumentPicker from 'expo-document-picker';
 
 const COLORS = {
@@ -40,6 +40,14 @@ const DEFAULT_PROJECTS = [
     action: 'upload',
   },
   {
+    id: 'project-join',
+    title: 'Join Shared Score',
+    icon: faUserPlus,
+    subtitle: 'Enter a share code',
+    tone: 'neutral',
+    action: 'join',
+  },
+  {
     id: 'project-empty-1',
     title: 'Untitled Score',
     subtitle: null,
@@ -57,14 +65,6 @@ const DEFAULT_PROJECTS = [
   },
   {
     id: 'project-empty-3',
-    title: 'Untitled Score',
-    subtitle: null,
-    icon: faFileMusic,
-    tone: 'neutral',
-    action: 'placeholder',
-  },
-  {
-    id: 'project-empty-4',
     title: 'Untitled Score',
     subtitle: null,
     icon: faFileMusic,
@@ -139,9 +139,38 @@ export default function UploadScreen({ navigation }) {
     });
   };
 
+  const joinSharedScore = async () => {
+    const code = prompt('Enter 6-character share code:');
+    if (!code) return;
+
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/resolve-code/${code.toUpperCase()}`);
+      const data = await response.json();
+
+      if (response.ok) {
+        navigation.push('Player', {
+          apiBaseUrl,
+          jobId: data.job_id,
+          musicxmlPath: data.files.musicxml,
+          pageManifestPath: data.files.score_pages,
+          fileName: data.title || 'Shared Score',
+        });
+      } else {
+        Alert.alert('Invalid Code', data.detail || 'The share code you entered is invalid or expired.');
+      }
+    } catch (error) {
+      Alert.alert('Connection Error', `Failed to resolve share code: ${error.message}`);
+    }
+  };
+
   const openProject = (project) => {
     if (project.action === 'upload') {
       pickDocument();
+      return;
+    }
+
+    if (project.action === 'join') {
+      joinSharedScore();
       return;
     }
 
@@ -273,7 +302,7 @@ export default function UploadScreen({ navigation }) {
       return DEFAULT_PROJECTS;
     }
 
-    return [DEFAULT_PROJECTS[0], latestProject, DEFAULT_PROJECTS[1], DEFAULT_PROJECTS[2], DEFAULT_PROJECTS[3]];
+    return [DEFAULT_PROJECTS[0], DEFAULT_PROJECTS[1], latestProject, DEFAULT_PROJECTS[2], DEFAULT_PROJECTS[3]];
   }, [latestProject]);
   const pagePadding = width >= 768 ? 24 : 20;
   const projectGap = width >= 768 ? 18 : 14;

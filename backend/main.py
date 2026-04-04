@@ -47,6 +47,16 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 # In-memory job tracking
 jobs: Dict[str, dict] = {}
 
+# Share code mapping: {code: job_id}
+share_codes: Dict[str, str] = {}
+
+
+def get_job_dir(job_id: str) -> Path:
+    """Get the directory for a specific job, creating it if needed."""
+    job_dir = OUTPUT_DIR / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    return job_dir
+
 
 # --- WEBSOCKET CONNECTION MANAGER ---
 
@@ -228,8 +238,9 @@ def _read_png_dimensions(image_path: Path) -> tuple[int, int]:
 
 def _build_manifest_from_existing_pages(job_id: str, musicxml_path: Path) -> Optional[Dict]:
     """Reuse previously rendered page PNGs if they already exist on disk."""
+    job_dir = get_job_dir(job_id)
     existing_pages = sorted(
-        OUTPUT_DIR.glob(f"{job_id}_page_*.png"),
+        job_dir.glob(f"*_page_*.png"),
         key=lambda path: int(path.stem.rsplit("_", 1)[-1]),
     )
     if not existing_pages:
@@ -244,7 +255,7 @@ def _build_manifest_from_existing_pages(job_id: str, musicxml_path: Path) -> Opt
         pages.append(
             {
                 "page_number": index,
-                "image_path": f"/api/download/{page_path.name}",
+                "image_path": f"/api/download/{job_id}/{page_path.name}",
                 "width": width,
                 "height": height,
             }
@@ -255,23 +266,31 @@ def _build_manifest_from_existing_pages(job_id: str, musicxml_path: Path) -> Opt
         "title": title,
         "page_count": len(pages),
         "pages": pages,
-        "musicxml_path": f"/api/download/{musicxml_path.name}",
+        "musicxml_path": f"/api/download/{job_id}/{musicxml_path.name}",
     }
 
 
-def _normalize_manifest(manifest: Dict) -> Dict:
+def _normalize_manifest(manifest: Dict, job_id: str) -> Dict:
     """Fill in missing fields for older cached page manifests."""
+    job_dir = get_job_dir(job_id)
     normalized_pages = []
     for page in manifest.get("pages", []):
         normalized_page = dict(page)
-        image_name = Path(normalized_page["image_path"]).name
-        image_path = OUTPUT_DIR / image_name
+        # Extract filename from path (handles both old flat and new nested paths)
+        image_path_str = normalized_page["image_path"]
+        if "/" in image_path_str:
+            image_name = image_path_str.split("/")[-1]
+        else:
+            image_name = image_path_str
+        image_path = job_dir / image_name
         width = normalized_page.get("width")
         height = normalized_page.get("height")
         if width is None or height is None:
             width, height = _read_png_dimensions(image_path)
         normalized_page["width"] = width
         normalized_page["height"] = height
+        # Ensure path uses new nested format
+        normalized_page["image_path"] = f"/api/download/{job_id}/{image_name}"
         normalized_pages.append(normalized_page)
 
     manifest["pages"] = normalized_pages
@@ -283,6 +302,8 @@ def _render_pages_with_verovio(job_id: str, musicxml_path: Path) -> Dict:
     """Render MusicXML to paginated PNG score pages using Verovio."""
     import cairosvg
     import verovio
+
+    job_dir = get_job_dir(job_id)
 
     toolkit = verovio.toolkit()
     toolkit.setOptions(
@@ -307,13 +328,13 @@ def _render_pages_with_verovio(job_id: str, musicxml_path: Path) -> Dict:
 
     for page_number in range(1, page_count + 1):
         svg = toolkit.renderToSVG(page_number)
-        png_path = OUTPUT_DIR / f"{job_id}_page_{page_number}.png"
+        png_path = job_dir / f"{job_id}_page_{page_number}.png"
         cairosvg.svg2png(bytestring=svg.encode("utf-8"), write_to=str(png_path))
         width, height = _read_png_dimensions(png_path)
         pages.append(
             {
                 "page_number": page_number,
-                "image_path": f"/api/download/{png_path.name}",
+                "image_path": f"/api/download/{job_id}/{png_path.name}",
                 "width": width,
                 "height": height,
             }
@@ -324,16 +345,17 @@ def _render_pages_with_verovio(job_id: str, musicxml_path: Path) -> Dict:
         "title": title,
         "page_count": len(pages),
         "pages": pages,
-        "musicxml_path": f"/api/download/{musicxml_path.name}",
+        "musicxml_path": f"/api/download/{job_id}/{musicxml_path.name}",
     }
 
 
 def render_score_pages(job_id: str, musicxml_path: Path) -> Dict:
     """Render and cache score pages for a MusicXML file."""
-    manifest_path = OUTPUT_DIR / f"{job_id}_pages.json"
+    job_dir = get_job_dir(job_id)
+    manifest_path = job_dir / "manifest.json"
 
     if manifest_path.exists():
-        manifest = _normalize_manifest(json.loads(manifest_path.read_text()))
+        manifest = _normalize_manifest(json.loads(manifest_path.read_text()), job_id)
         manifest_path.write_text(json.dumps(manifest, indent=2))
     else:
         manifest = _build_manifest_from_existing_pages(job_id, musicxml_path)
@@ -402,28 +424,29 @@ def render_midi_to_mp3(midi_path: Path, mp3_path: Path):
 def run_audio_pipeline(job_id: str, musicxml_path: Path):
     """Convert MusicXML to MIDI and audio, including individual stems with padding."""
     try:
+        job_dir = get_job_dir(job_id)
         jobs[job_id]["progress"]["audio_conversion"] = "processing"
         score = converter.parse(str(musicxml_path))
         score_duration = score.highestTime
-        
+
         # 1. Generate full mix
-        full_midi_path = OUTPUT_DIR / f"{job_id}_full.mid"
-        full_mp3_path = OUTPUT_DIR / f"{job_id}_full.mp3"
+        full_midi_path = job_dir / f"{job_id}_full.mid"
+        full_mp3_path = job_dir / f"{job_id}_full.mp3"
         score.write("midi", fp=str(full_midi_path))
         render_midi_to_mp3(full_midi_path, full_mp3_path)
-        
-        jobs[job_id]["files"]["full_audio"] = f"/api/download/{job_id}_full.mp3"
-        jobs[job_id]["files"]["full_midi"] = f"/api/download/{job_id}_full.mid"
+
+        jobs[job_id]["files"]["full_audio"] = f"/api/download/{job_id}/{job_id}_full.mp3"
+        jobs[job_id]["files"]["full_midi"] = f"/api/download/{job_id}/{job_id}_full.mid"
 
         # 2. Generate individual parts
         parts = list(score.parts) if hasattr(score, "parts") else [score]
         jobs[job_id]["files"]["parts"] = []
-        
+
         for index, part in enumerate(parts):
             part_name = part.partName or f"Part {index + 1}"
             part_id = f"part_{index}"
-            part_midi_path = OUTPUT_DIR / f"{job_id}_{part_id}.mid"
-            part_mp3_path = OUTPUT_DIR / f"{job_id}_{part_id}.mp3"
+            part_midi_path = job_dir / f"{job_id}_{part_id}.mid"
+            part_mp3_path = job_dir / f"{job_id}_{part_id}.mp3"
 
             # Create a copy of the part for processing to avoid side effects
             p_clone = copy.deepcopy(part)
@@ -450,8 +473,8 @@ def run_audio_pipeline(job_id: str, musicxml_path: Path):
                 {
                     "part_id": part_id,
                     "name": part_name,
-                    "audio_path": f"/api/download/{job_id}_{part_id}.mp3",
-                    "midi_path": f"/api/download/{job_id}_{part_id}.mid",
+                    "audio_path": f"/api/download/{job_id}/{job_id}_{part_id}.mp3",
+                    "midi_path": f"/api/download/{job_id}/{job_id}_{part_id}.mid",
                 }
             )
 
@@ -467,22 +490,35 @@ def run_audio_pipeline(job_id: str, musicxml_path: Path):
 def run_full_pipeline(job_id: str, pdf_path: Path):
     """Run Audiveris transcription, warm the score-page cache, then build audio outputs."""
     try:
+        job_dir = get_job_dir(job_id)
         jobs[job_id]["progress"]["transcription"] = "processing"
         audiveris_service = get_audiveris_service()
         if audiveris_service is None:
             raise RuntimeError("Audiveris is not available. Start the Docker stack first.")
 
-        # 1. Transcribe PDF to MusicXML (now handles movement combination)
+        # 1. Transcribe PDF to MusicXML (Audiveris outputs to flat outputs/ dir)
         mxl_output_str = audiveris_service.transcribe_pdf(str(pdf_path), str(OUTPUT_DIR))
         mxl_output_path = Path(mxl_output_str)
 
+        # Move all related files from outputs/ to outputs/{job_id}/
+        # Audiveris creates: {job_id}.mxl, {job_id}.mvt*.mxl, {job_id}.omr, {job_id}-*.log
+        for file_pattern in [f"{job_id}*"]:
+            for file_path in OUTPUT_DIR.glob(file_pattern):
+                if file_path.is_file():
+                    dest_path = job_dir / file_path.name
+                    logger.info(f"Moving {file_path} to {dest_path}")
+                    shutil.move(str(file_path), str(dest_path))
+
+        # Update mxl_output_path to new location
+        mxl_output_path = job_dir / mxl_output_path.name
+
         # Ensure filename is canonical (job_id.mxl)
-        canonical_path = OUTPUT_DIR / f"{job_id}.mxl"
-        if mxl_output_path != canonical_path:
+        canonical_path = job_dir / f"{job_id}.mxl"
+        if mxl_output_path != canonical_path and mxl_output_path.exists():
             shutil.move(str(mxl_output_path), str(canonical_path))
 
         jobs[job_id]["progress"]["transcription"] = "completed"
-        jobs[job_id]["files"]["musicxml"] = f"/api/download/{job_id}.mxl"
+        jobs[job_id]["files"]["musicxml"] = f"/api/download/{job_id}/{job_id}.mxl"
 
         # 2. Render Score Metadata
         try:
@@ -538,7 +574,8 @@ async def get_job_status(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
 
     job = jobs[job_id]
-    manifest_path = OUTPUT_DIR / f"{job_id}_pages.json"
+    job_dir = get_job_dir(job_id)
+    manifest_path = job_dir / "manifest.json"
     if job["files"].get("score_pages") is None and manifest_path.exists():
         job["files"]["score_pages"] = f"/api/score-pages/{job_id}"
 
@@ -554,7 +591,8 @@ async def get_job_status(job_id: str):
 @app.post("/api/convert-to-audio", response_model=TranscriptionResponse)
 async def convert_to_audio(background_tasks: BackgroundTasks, request: ConversionRequest):
     job_id = request.job_id or str(uuid.uuid4())
-    mxl_path = OUTPUT_DIR / f"{job_id}.mxl"
+    job_dir = get_job_dir(job_id)
+    mxl_path = job_dir / f"{job_id}.mxl"
 
     # Save the updated MusicXML content
     async with aiofiles.open(mxl_path, "w") as f:
@@ -565,7 +603,7 @@ async def convert_to_audio(background_tasks: BackgroundTasks, request: Conversio
             "status": "processing",
             "progress": {"transcription": "completed", "audio_conversion": "queued"},
             "files": {
-                "musicxml": f"/api/download/{job_id}.mxl",
+                "musicxml": f"/api/download/{job_id}/{job_id}.mxl",
                 "score_pages": f"/api/score-pages/{job_id}",
                 "parts": [],
             },
@@ -583,7 +621,8 @@ async def convert_to_audio(background_tasks: BackgroundTasks, request: Conversio
 @app.get("/api/alignment/{job_id}", response_model=AlignmentResponse)
 async def get_alignment_data(job_id: str):
     if job_id not in jobs or "alignment" not in jobs[job_id]:
-        mxl_path = OUTPUT_DIR / f"{job_id}.mxl"
+        job_dir = get_job_dir(job_id)
+        mxl_path = job_dir / f"{job_id}.mxl"
         if mxl_path.exists():
             alignment = extract_alignment(mxl_path)
             return {"job_id": job_id, **alignment}
@@ -595,7 +634,8 @@ async def get_alignment_data(job_id: str):
 @app.get("/api/score-metadata/{job_id}", response_model=ScoreMetadata)
 async def get_score_metadata(job_id: str):
     if job_id not in jobs or "score_metadata" not in jobs[job_id]:
-        mxl_path = OUTPUT_DIR / f"{job_id}.mxl"
+        job_dir = get_job_dir(job_id)
+        mxl_path = job_dir / f"{job_id}.mxl"
         if mxl_path.exists():
             manifest = render_score_pages(job_id, mxl_path)
             return {
@@ -611,13 +651,14 @@ async def get_score_metadata(job_id: str):
 
 @app.get("/api/score-pages/{job_id}", response_model=ScorePagesResponse)
 async def get_score_pages(job_id: str):
-    manifest_path = OUTPUT_DIR / f"{job_id}_pages.json"
+    job_dir = get_job_dir(job_id)
+    manifest_path = job_dir / "manifest.json"
     if manifest_path.exists():
-        manifest = _normalize_manifest(json.loads(manifest_path.read_text()))
+        manifest = _normalize_manifest(json.loads(manifest_path.read_text()), job_id)
         manifest_path.write_text(json.dumps(manifest, indent=2))
         return manifest
 
-    mxl_path = OUTPUT_DIR / f"{job_id}.mxl"
+    mxl_path = job_dir / f"{job_id}.mxl"
     if not mxl_path.exists():
         raise HTTPException(status_code=404, detail="Rendered score pages not found")
 
@@ -628,11 +669,11 @@ async def get_score_pages(job_id: str):
         raise HTTPException(status_code=500, detail="Failed to render paginated score pages") from exc
 
 
-@app.get("/api/download/{filename}")
-async def download_file(filename: str):
-    file_path = OUTPUT_DIR / filename
-    if not file_path.exists():
-        file_path = UPLOAD_DIR / filename
+@app.get("/api/download/{job_id}/{filename}")
+async def download_file(job_id: str, filename: str):
+    """Download a file from a specific job's directory."""
+    job_dir = get_job_dir(job_id)
+    file_path = job_dir / filename
 
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="File not found")
@@ -650,6 +691,8 @@ async def download_file(filename: str):
         media_type = "application/pdf"
     elif filename.endswith(".png"):
         media_type = "image/png"
+    elif filename.endswith(".json"):
+        media_type = "application/json"
 
     return FileResponse(path=str(file_path), media_type=media_type, filename=filename)
 
@@ -829,3 +872,89 @@ async def websocket_annotations(websocket: WebSocket, job_id: str):
     except Exception as e:
         logger.error(f"WebSocket error for job {job_id}: {e}")
         connection_manager.disconnect(websocket, job_id)
+
+
+# --- SHARE CODE ENDPOINTS ---
+
+
+def generate_share_code() -> str:
+    """Generate a random 6-character alphanumeric share code."""
+    import random
+    import string
+    while True:
+        code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+        if code not in share_codes:
+            return code
+
+
+class ShareCodeResponse(BaseModel):
+    job_id: str
+    share_code: str
+    message: str
+
+
+class ResolveCodeResponse(BaseModel):
+    job_id: str
+    title: Optional[str] = None
+    status: str
+    files: FilePaths
+
+
+@app.post("/api/share/{job_id}", response_model=ShareCodeResponse)
+async def create_share_code(job_id: str):
+    """Generate a shareable code for a job."""
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Check if a code already exists for this job
+    existing_code = None
+    for code, jid in share_codes.items():
+        if jid == job_id:
+            existing_code = code
+            break
+
+    if existing_code:
+        return {
+            "job_id": job_id,
+            "share_code": existing_code,
+            "message": "Share code retrieved"
+        }
+
+    # Generate new code
+    share_code = generate_share_code()
+    share_codes[share_code] = job_id
+    logger.info(f"Generated share code {share_code} for job {job_id}")
+
+    return {
+        "job_id": job_id,
+        "share_code": share_code,
+        "message": "Share code created"
+    }
+
+
+@app.get("/api/resolve-code/{code}", response_model=ResolveCodeResponse)
+async def resolve_share_code(code: str):
+    """Resolve a share code to job details."""
+    code_upper = code.upper()
+
+    if code_upper not in share_codes:
+        raise HTTPException(status_code=404, detail="Invalid share code")
+
+    job_id = share_codes[code_upper]
+
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job no longer available")
+
+    job = jobs[job_id]
+
+    # Get title from score metadata if available
+    title = None
+    if "score_metadata" in job:
+        title = job["score_metadata"].get("title")
+
+    return {
+        "job_id": job_id,
+        "title": title,
+        "status": job["status"],
+        "files": job["files"]
+    }

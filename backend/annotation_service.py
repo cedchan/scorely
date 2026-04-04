@@ -15,9 +15,8 @@ import y_py as Y
 
 logger = logging.getLogger(__name__)
 
-# Directory for storing annotation data
-ANNOTATION_DIR = Path("outputs/annotations")
-ANNOTATION_DIR.mkdir(parents=True, exist_ok=True)
+# Base output directory
+OUTPUT_DIR = Path("outputs")
 
 
 # --- DATA MODELS ---
@@ -80,7 +79,9 @@ class AnnotationStore:
 
     def _get_annotation_file(self, job_id: str) -> Path:
         """Get path to annotation JSON file"""
-        return ANNOTATION_DIR / f"{job_id}_annotations.json"
+        job_dir = OUTPUT_DIR / job_id
+        job_dir.mkdir(parents=True, exist_ok=True)
+        return job_dir / "annotations.json"
 
     def _load_annotations(self, job_id: str):
         """Load annotations from disk into memory and Yjs"""
