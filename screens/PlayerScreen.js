@@ -24,7 +24,10 @@ import {
 import AnnotationLayer from '../components/AnnotationLayer';
 import AnnotationToolbar from '../components/AnnotationToolbar';
 import annotationSyncService from '../services/annotationSync';
-
+import { 
+  FilesetResolver, 
+  FaceLandmarker 
+} from '@mediapipe/tasks-vision';
 const COLORS = {
   beige: '#FAF7F0',
   lightBrown: '#A9988F',
@@ -58,7 +61,8 @@ export default function PlayerScreen({ route }) {
   const [audioError, setAudioError] = useState(null);
   const [alignmentMappings, setAlignmentMappings] = useState([]);
   const [activeMeasure, setActiveMeasure] = useState(null);
-
+  // Nod state
+  const [nodEnabled, setNodEnabled] = useState(false);
   // Annotation state
   const [annotations, setAnnotations] = useState([]);
   const [annotationsEnabled, setAnnotationsEnabled] = useState(false);
@@ -69,7 +73,15 @@ export default function PlayerScreen({ route }) {
     () => `user-${Math.random().toString(36).slice(2, 11)}`
   );
   const [shareCode, setShareCode] = useState(null);
-
+  const videoRef = useRef(null);
+  const streamRef = useRef(null);
+  const faceLandmarkerRef = useRef(null);
+  const animationFrameRef = useRef(null);
+  const [cameraEnabled, setCameraEnabled] = useState(false);
+  const nodPhaseRef = useRef('idle');
+  const lastTurnTimeRef = useRef(0);
+  const baselineRelativeYRef = useRef(null);
+  const currentPageRef = useRef(0);
   const jobId = route.params?.jobId;
   const apiBaseUrl = route.params?.apiBaseUrl || getFallbackApiBaseUrl();
   const pageManifestPath = route.params?.pageManifestPath || (jobId ? `/api/score-pages/${jobId}` : null);
@@ -182,7 +194,9 @@ export default function PlayerScreen({ route }) {
       }
     };
   }, [apiBaseUrl, cacheToken, jobId]);
-
+  useEffect(() => {
+    currentPageRef.current = currentPage;
+  }, [currentPage]);
   useEffect(() => {
     const loadAlignment = async () => {
       if (!jobId) {
@@ -239,7 +253,6 @@ export default function PlayerScreen({ route }) {
         prev.map((a) => (a.id === annotation.id ? annotation : a))
       );
     };
-
     const handleAnnotationDeleted = ({ annotationId }) => {
       setAnnotations((prev) => prev.filter((a) => a.id !== annotationId));
     };
@@ -264,7 +277,128 @@ export default function PlayerScreen({ route }) {
       annotationSyncService.disconnect();
     };
   }, [apiBaseUrl, jobId, userId]);
-
+  useEffect(() => {
+    console.log('camera effect running', { platform: Platform.OS, nodEnabled });
+    if (Platform.OS !== 'web') return;
+  
+    let cancelled = false;
+  
+    const stopCamera = () => {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = null;
+      }
+  
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+      }
+  
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
+      }
+  
+      faceLandmarkerRef.current = null;
+      setCameraEnabled(false);
+      nodPhaseRef.current = 'idle';
+      lastTurnTimeRef.current = 0;
+      baselineRelativeYRef.current = null;
+    };
+  
+    const startCameraAndTracking = async () => {
+      if (!nodEnabled) {
+        stopCamera();
+        return;
+      }
+      console.log('about to request camera');
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'user' },
+          audio: false,
+        });
+        const vision = await FilesetResolver.forVisionTasks(
+          'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm'
+        );
+  
+        const faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath:
+              'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task',
+          },
+          runningMode: 'VIDEO',
+          numFaces: 1,
+        });
+  
+        faceLandmarkerRef.current = faceLandmarker;
+  
+        if (cancelled) return;
+  
+        streamRef.current = stream;
+  
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play();
+        }
+  
+        if (cancelled) return;
+  
+        setCameraEnabled(true);
+  
+        const detectFrame = () => {
+          if (
+            cancelled ||
+            !videoRef.current ||
+            !faceLandmarkerRef.current ||
+            videoRef.current.readyState < 2
+          ) {
+            animationFrameRef.current = requestAnimationFrame(detectFrame);
+            return;
+          }
+  
+          const results = faceLandmarkerRef.current.detectForVideo(
+            videoRef.current,
+            performance.now()
+          );
+  
+          const face = results.faceLandmarks?.[0];
+  
+          if (face) {
+            const nose = face[1];
+            const leftEye = face[33];
+            const rightEye = face[263];
+          
+            if (nose && leftEye && rightEye) {
+              const eyeY = (leftEye.y + rightEye.y) / 2;
+          
+              console.log(
+                'face detected',
+                'noseY:', nose.y,
+                'leftEyeY:', leftEye.y,
+                'rightEyeY:', rightEye.y,
+                'eyeY:', eyeY
+              );
+          
+              handleNodDetection(nose.y, eyeY);
+            }
+          }
+  
+          animationFrameRef.current = requestAnimationFrame(detectFrame);
+        };
+  
+        detectFrame();
+      } catch (err) {
+        console.error('Camera / face tracking error:', err?.name, err?.message, err);
+        stopCamera();
+      }
+    };
+  
+    startCameraAndTracking();
+  
+    return () => {
+      cancelled = true;
+      stopCamera();
+    };
+  }, [nodEnabled]);
   useEffect(() => {
     let objectUrl = null;
 
@@ -316,7 +450,50 @@ export default function PlayerScreen({ route }) {
     });
     setCurrentPage(pageIndex);
   };
-
+  const handleNodDetection = (noseY, eyeY) => {
+    const relativeY = noseY - eyeY;
+    const now = Date.now();
+    const downThreshold = 0.01;
+    const upThreshold = 0.004;
+    const cooldownMs = 1200;
+  
+    if (baselineRelativeYRef.current === null) {
+      baselineRelativeYRef.current = relativeY;
+      return;
+    }
+  
+    const delta = relativeY - baselineRelativeYRef.current;
+  
+    console.log(
+      'nod check',
+      'relativeY:', relativeY,
+      'baseline:', baselineRelativeYRef.current,
+      'delta:', delta,
+      'nodPhase:', nodPhaseRef.current,
+      'lastTurnTime:', lastTurnTimeRef.current
+    );
+  
+    if (now - lastTurnTimeRef.current < cooldownMs) {
+      return;
+    }
+  
+    if (nodPhaseRef.current === 'idle' && delta > downThreshold) {
+      nodPhaseRef.current = 'down';
+      return;
+    }
+  
+    if (nodPhaseRef.current === 'down' && delta < upThreshold) {
+      nodPhaseRef.current = 'idle';
+      lastTurnTimeRef.current = now;
+  
+      if (currentPageRef.current < pages.length - 1) {
+        goToPage(currentPageRef.current + 1);
+      }
+    }
+  
+    baselineRelativeYRef.current =
+      baselineRelativeYRef.current * 0.9 + relativeY * 0.1;
+  };
   const onMomentumScrollEnd = (event) => {
     const nextPage = Math.round(event.nativeEvent.contentOffset.x / width);
     setCurrentPage(nextPage);
@@ -466,6 +643,15 @@ export default function PlayerScreen({ route }) {
 
   return (
     <SafeAreaView style={styles.container}>
+          {Platform.OS === 'web' ? (
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted
+        style={{ display: 'none' }}
+      />
+    ) : null}
       <View style={styles.headerCard}>
         <View style={styles.headerTitleRow}>
           <View style={styles.headerTitleWrap}>
@@ -523,17 +709,37 @@ export default function PlayerScreen({ route }) {
       </View>
 
       {/* Annotation Toolbar */}
-      <AnnotationToolbar
-        currentTool={currentTool}
-        currentColor={currentColor}
-        currentStrokeWidth={currentStrokeWidth}
-        enabled={annotationsEnabled}
-        onToolChange={setCurrentTool}
-        onColorChange={setCurrentColor}
-        onStrokeWidthChange={setCurrentStrokeWidth}
-        onClearAll={handleClearAllAnnotations}
-        onToggleEnabled={() => setAnnotationsEnabled(!annotationsEnabled)}
-      />
+      <View style={styles.toolbarRow}>
+        <AnnotationToolbar
+          currentTool={currentTool}
+          currentColor={currentColor}
+          currentStrokeWidth={currentStrokeWidth}
+          enabled={annotationsEnabled}
+          onToolChange={setCurrentTool}
+          onColorChange={setCurrentColor}
+          onStrokeWidthChange={setCurrentStrokeWidth}
+          onClearAll={handleClearAllAnnotations}
+          onToggleEnabled={() => setAnnotationsEnabled(!annotationsEnabled)}
+        />
+
+        <View style={styles.rightButtons}>
+          <TouchableOpacity
+            style={[styles.gestureButton, nodEnabled && styles.gestureButtonActive]}
+            onPress={() => {
+              console.log('nod button clicked');
+              setNodEnabled(!nodEnabled);
+            }}          >
+            <Text
+              style={[
+                styles.gestureButtonText,
+                nodEnabled && styles.gestureButtonTextActive
+              ]}
+            >
+              Nod to Turn Page
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
 
       <ScrollView
         ref={scrollViewRef}
@@ -868,5 +1074,53 @@ const styles = StyleSheet.create({
     color: COLORS.lightBrown,
     marginTop: 10,
     textAlign: 'center',
+  },
+  toolbarRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    marginBottom: 10,
+    backgroundColor: COLORS.lightBrown,
+  },
+  
+  gestureButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.beige,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  
+  gestureButtonText: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 16,
+    color: COLORS.darkBrown,
+  },
+  gestureButtonActive: {
+    backgroundColor: COLORS.darkBrown,   
+  },
+  
+  gestureButtonTextActive: {
+    color: COLORS.beige,  
+  },
+  testButton: {
+    marginLeft: 10,
+    backgroundColor: '#C8B8A6',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  
+  testButtonText: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 14,
+    color: '#58392F',
+  },
+  rightButtons: {
+    flexDirection: 'row',  
+    alignItems: 'center',
   },
 });

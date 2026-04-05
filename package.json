@@ -18,6 +18,7 @@
     "@fortawesome/free-regular-svg-icons": "^7.2.0",
     "@fortawesome/free-solid-svg-icons": "^7.2.0",
     "@fortawesome/react-native-fontawesome": "^0.3.2",
+    "@mediapipe/tasks-vision": "^0.10.34",
     "@react-navigation/native": "^7.2.2",
     "@react-navigation/native-stack": "^7.14.10",
     "expo": "^55.0.11",
@@ -30,7 +31,7 @@
     "react-native-screens": "^4.24.0",
     "react-native-svg": "^15.0.0",
     "react-native-web": "^0.21.0",
-    "yjs": "^13.6.0",
-    "y-websocket": "^2.0.0"
+    "y-websocket": "^2.0.0",
+    "yjs": "^13.6.0"
   }
 }
