@@ -39,7 +39,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-CLOUD_DIR = Path("cloud")
+BASE_DIR = Path(__file__).resolve().parent
+CLOUD_DIR = BASE_DIR / "cloud"
 CLOUD_DIR.mkdir(exist_ok=True)
 
 # In-memory job tracking

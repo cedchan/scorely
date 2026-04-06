@@ -26,6 +26,7 @@ import {
 import AnnotationLayer from '../components/AnnotationLayer';
 import AnnotationToolbar from '../components/AnnotationToolbar';
 import annotationSyncService from '../services/annotationSync';
+import { getApiBaseUrl } from '../services/apiBaseUrl';
 import { 
   FilesetResolver, 
   FaceLandmarker 
@@ -38,17 +39,6 @@ const COLORS = {
 };
 
 const MEDIAPIPE_VERSION = '0.10.34';
-
-const getFallbackApiBaseUrl = () => {
-  if (Platform.OS === 'web') {
-    if (typeof window !== 'undefined' && window.location?.hostname) {
-      const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
-      return `${protocol}//${window.location.hostname}:8000`;
-    }
-  }
-
-  return 'http://localhost:8000';
-};
 
 export default function PlayerScreen({ route, navigation }) {
   const { width, height } = useWindowDimensions();
@@ -89,7 +79,7 @@ export default function PlayerScreen({ route, navigation }) {
   const baselineRelativeYRef = useRef(null);
   const currentPageRef = useRef(0);
   const jobId = route.params?.jobId;
-  const apiBaseUrl = route.params?.apiBaseUrl || getFallbackApiBaseUrl();
+  const apiBaseUrl = route.params?.apiBaseUrl || getApiBaseUrl();
   const pageManifestPath = route.params?.pageManifestPath || (jobId ? `/api/score-pages/${jobId}` : null);
   const cacheToken = jobId || route.params?.fileName || 'score';
   const isTabletLayout = width >= 900;

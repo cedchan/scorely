@@ -60,8 +60,8 @@ class AudiverisService:
         Returns:
             Path to generated MusicXML file
         """
-        pdf_path = Path(pdf_path)
-        output_dir = Path(output_dir)
+        pdf_path = Path(pdf_path).resolve()
+        output_dir = Path(output_dir).resolve()
         output_dir.mkdir(parents=True, exist_ok=True)
 
         if not pdf_path.exists():
@@ -69,9 +69,10 @@ class AudiverisService:
 
         if self.in_docker:
             # Running inside Docker - call Audiveris container via docker exec
-            # Convert paths to container paths (cloud/job-id/file.pdf -> /audiveris/cloud/job-id/file.pdf)
-            relative_pdf = pdf_path.relative_to(Path.cwd())
-            relative_output = output_dir.relative_to(Path.cwd())
+            # Convert host paths (/app/cloud/job-id/file.pdf) to Audiveris container paths
+            cwd = Path.cwd().resolve()
+            relative_pdf = pdf_path.relative_to(cwd)
+            relative_output = output_dir.relative_to(cwd)
             container_pdf = f"/audiveris/{relative_pdf}"
             container_output = f"/audiveris/{relative_output}"
 

@@ -13,10 +13,10 @@ import {
   View,
 } from 'react-native';
 import { useFonts, Afacad_400Regular } from '@expo-google-fonts/afacad';
-import Constants from 'expo-constants';
 import { FontAwesomeIcon } from '@fortawesome/react-native-fontawesome';
 import { faCheckCircle, faClock, faMusic, faUpload, faUserPlus } from '@fortawesome/free-solid-svg-icons';
 import * as DocumentPicker from 'expo-document-picker';
+import { getApiBaseUrl } from '../services/apiBaseUrl';
 
 const COLORS = {
   background: '#F7F1E8',
@@ -81,32 +81,6 @@ const DEFAULT_PROJECTS = [
     pageManifestPath: '/api/score-pages/8f8216e9-6030-41ce-a5c9-a84f1b4734fc',
   },
 ];
-
-const getApiBaseUrl = () => {
-  if (Platform.OS === 'android') {
-    return 'http://10.0.2.2:8000';
-  }
-
-  if (Platform.OS === 'web') {
-    if (typeof window !== 'undefined' && window.location?.hostname) {
-      const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
-      return `${protocol}//${window.location.hostname}:8000`;
-    }
-    return 'http://localhost:8000';
-  }
-
-  const hostUri =
-    Constants.expoConfig?.hostUri ||
-    Constants.expoGoConfig?.debuggerHost ||
-    Constants.manifest2?.extra?.expoGo?.debuggerHost;
-
-  if (hostUri) {
-    const host = hostUri.split(':')[0];
-    return `http://${host}:8000`;
-  }
-
-  return 'http://localhost:8000';
-};
 
 export default function UploadScreen({ navigation }) {
   const { width, height } = useWindowDimensions();
@@ -265,7 +239,7 @@ export default function UploadScreen({ navigation }) {
     } catch (error) {
       clearPollTimer();
       setIsLoading(false);
-      setStatusText('We could not complete transcription.');
+      setStatusText(`We could not complete transcription. ${error.message}`);
       Alert.alert('Transcription Error', error.message);
     }
   };
