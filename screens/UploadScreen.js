@@ -15,7 +15,7 @@ import {
 import { useFonts, Afacad_400Regular } from '@expo-google-fonts/afacad';
 import Constants from 'expo-constants';
 import { FontAwesomeIcon } from '@fortawesome/react-native-fontawesome';
-import { faCheckCircle, faClock, faFileMusic, faUpload, faUserPlus } from '@fortawesome/free-solid-svg-icons';
+import { faCheckCircle, faClock, faMusic, faUpload, faUserPlus } from '@fortawesome/free-solid-svg-icons';
 import * as DocumentPicker from 'expo-document-picker';
 
 const COLORS = {
@@ -51,7 +51,7 @@ const DEFAULT_PROJECTS = [
     id: 'project-empty-1',
     title: 'Untitled Score',
     subtitle: null,
-    icon: faFileMusic,
+    icon: faMusic,
     tone: 'neutral',
     action: 'placeholder',
   },
@@ -59,7 +59,7 @@ const DEFAULT_PROJECTS = [
     id: 'project-empty-2',
     title: 'Untitled Score',
     subtitle: null,
-    icon: faFileMusic,
+    icon: faMusic,
     tone: 'neutral',
     action: 'placeholder',
   },
@@ -67,7 +67,7 @@ const DEFAULT_PROJECTS = [
     id: 'project-empty-3',
     title: 'Untitled Score',
     subtitle: null,
-    icon: faFileMusic,
+    icon: faMusic,
     tone: 'neutral',
     action: 'placeholder',
   },
@@ -121,6 +121,30 @@ export default function UploadScreen({ navigation }) {
       }
     };
   }, []);
+
+  // Refresh latest project when screen comes into focus
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('focus', async () => {
+      // Refresh the latest project's title if it exists
+      if (latestProject?.jobId && latestProject?.pageManifestPath) {
+        try {
+          const response = await fetch(`${apiBaseUrl}${latestProject.pageManifestPath}`);
+          const data = await response.json();
+
+          if (response.ok && data.title) {
+            setLatestProject((prev) => ({
+              ...prev,
+              title: data.title,
+            }));
+          }
+        } catch (error) {
+          console.error('Failed to refresh project title:', error);
+        }
+      }
+    });
+
+    return unsubscribe;
+  }, [navigation, latestProject?.jobId, latestProject?.pageManifestPath, apiBaseUrl]);
 
   const clearPollTimer = () => {
     if (pollTimerRef.current) {
@@ -215,7 +239,7 @@ export default function UploadScreen({ navigation }) {
           id: `project-${nextJobId}`,
           title: fileName,
           subtitle: null,
-          icon: faFileMusic,
+          icon: faMusic,
           tone: 'neutral',
           action: 'open',
           jobId: nextJobId,
@@ -309,8 +333,9 @@ export default function UploadScreen({ navigation }) {
   const projectAspectRatio = 8.5 / 11;
   const projectCardWidth = width >= 1024 ? 250 : width >= 768 ? 220 : 170;
   const projectCardHeight = projectCardWidth / projectAspectRatio;
-  const snapInterval = projectCardWidth + projectGap;
-  const carouselSidePadding = Math.max(0, (width - projectCardWidth) / 2);
+  const maxScale = 1.08;
+  const snapInterval = projectCardWidth * maxScale + projectGap;
+  const carouselSidePadding = Math.max(0, (width - projectCardWidth * maxScale) / 2);
   const carouselHeight = projectCardHeight + 40;
 
   if (!fontsLoaded) {

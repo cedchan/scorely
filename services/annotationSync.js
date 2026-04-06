@@ -26,6 +26,7 @@ class AnnotationSyncService {
       annotation_updated: [],
       annotation_deleted: [],
       sync_response: [],
+      title_updated: [],
       error: [],
     };
   }
@@ -228,6 +229,12 @@ class AnnotationSyncService {
       case 'annotation_deleted':
         this._notifyListeners('annotation_deleted', {
           annotationId: data.annotation_id,
+        });
+        break;
+
+      case 'title_updated':
+        this._notifyListeners('title_updated', {
+          title: data.title,
         });
         break;
 

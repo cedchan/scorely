@@ -189,6 +189,10 @@ class ScorePagesResponse(BaseModel):
     musicxml_path: Optional[str] = None
 
 
+class UpdateTitleRequest(BaseModel):
+    title: str
+
+
 # --- HELPER FUNCTIONS ---
 
 
@@ -247,7 +251,13 @@ def _build_manifest_from_existing_pages(job_id: str, musicxml_path: Path) -> Opt
         return None
 
     score = converter.parse(str(musicxml_path))
-    title = score.metadata.title if score.metadata and score.metadata.title else "Untitled score"
+    title = score.metadata.title if score.metadata and score.metadata.title else None
+
+    # Fall back to original filename if no title in metadata
+    if not title and job_id in jobs and "original_filename" in jobs[job_id]:
+        title = jobs[job_id]["original_filename"]
+    if not title:
+        title = "Untitled score"
 
     pages = []
     for index, page_path in enumerate(existing_pages, start=1):
@@ -323,7 +333,14 @@ def _render_pages_with_verovio(job_id: str, musicxml_path: Path) -> Dict:
         raise RuntimeError("Verovio could not paginate this score")
 
     score = converter.parse(str(musicxml_path))
-    title = score.metadata.title if score.metadata and score.metadata.title else "Untitled score"
+    title = score.metadata.title if score.metadata and score.metadata.title else None
+
+    # Fall back to original filename if no title in metadata
+    if not title and job_id in jobs and "original_filename" in jobs[job_id]:
+        title = jobs[job_id]["original_filename"]
+    if not title:
+        title = "Untitled score"
+
     pages = []
 
     for page_number in range(1, page_count + 1):
@@ -551,6 +568,9 @@ async def transcribe_pdf(background_tasks: BackgroundTasks, file: UploadFile = F
     job_id = str(uuid.uuid4())
     pdf_path = UPLOAD_DIR / f"{job_id}.pdf"
 
+    # Extract filename without extension as default title
+    original_filename = Path(file.filename).stem
+
     logger.info("Received PDF for job %s: %s", job_id, file.filename)
 
     async with aiofiles.open(pdf_path, "wb") as out_file:
@@ -561,6 +581,7 @@ async def transcribe_pdf(background_tasks: BackgroundTasks, file: UploadFile = F
         "status": "processing",
         "progress": {"transcription": "queued", "audio_conversion": "not_started"},
         "files": {"musicxml": None, "score_pages": None, "parts": []},
+        "original_filename": original_filename,
     }
 
     background_tasks.add_task(run_full_pipeline, job_id, pdf_path)
@@ -667,6 +688,37 @@ async def get_score_pages(job_id: str):
     except Exception as exc:
         logger.error("Failed to build score pages for %s: %s", job_id, exc)
         raise HTTPException(status_code=500, detail="Failed to render paginated score pages") from exc
+
+
+@app.patch("/api/score/{job_id}/title")
+async def update_score_title(job_id: str, request: UpdateTitleRequest):
+    """Update the title of a score."""
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Update in-memory job
+    if "score_metadata" not in jobs[job_id]:
+        jobs[job_id]["score_metadata"] = {}
+    jobs[job_id]["score_metadata"]["title"] = request.title
+
+    # Update manifest file if it exists
+    job_dir = get_job_dir(job_id)
+    manifest_path = job_dir / "manifest.json"
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text())
+        manifest["title"] = request.title
+        manifest_path.write_text(json.dumps(manifest, indent=2))
+
+    # Broadcast title change to all connected clients
+    await connection_manager.broadcast(
+        job_id,
+        {
+            "type": "title_updated",
+            "title": request.title
+        }
+    )
+
+    return {"job_id": job_id, "title": request.title}
 
 
 @app.get("/api/download/{job_id}/{filename}")
@@ -805,19 +857,35 @@ async def websocket_annotations(websocket: WebSocket, job_id: str):
                 ann_data = data.get("annotation")
                 if ann_data:
                     try:
-                        annotation = Annotation(**ann_data)
-                        updated_ann = annotation_store.update(annotation)
+                        # Check if this is a temporary live update
+                        is_temp = ann_data.pop("_isTemp", False)
+                        ann_data.pop("_isFinal", False)  # Remove flag if present
 
-                        if updated_ann:
-                            # Broadcast to other clients
+                        if is_temp:
+                            # Don't persist temporary updates, just broadcast them
                             await connection_manager.broadcast(
                                 job_id,
                                 {
                                     "type": "annotation_updated",
-                                    "annotation": updated_ann.model_dump()
+                                    "annotation": ann_data
                                 },
                                 exclude=websocket
                             )
+                        else:
+                            # Regular or final update - persist to store
+                            annotation = Annotation(**ann_data)
+                            updated_ann = annotation_store.update(annotation)
+
+                            if updated_ann:
+                                # Broadcast to other clients
+                                await connection_manager.broadcast(
+                                    job_id,
+                                    {
+                                        "type": "annotation_updated",
+                                        "annotation": updated_ann.model_dump()
+                                    },
+                                    exclude=websocket
+                                )
                     except Exception as e:
                         logger.error(f"Failed to update annotation: {e}")
 

@@ -14,7 +14,9 @@ import {
 import { useFonts, Afacad_400Regular } from '@expo-google-fonts/afacad';
 import { FontAwesomeIcon } from '@fortawesome/react-native-fontawesome';
 import {
+  faArrowLeft,
   faBackward,
+  faEdit,
   faForward,
   faMusic,
   faPause,
@@ -45,7 +47,7 @@ const getFallbackApiBaseUrl = () => {
   return 'http://localhost:8000';
 };
 
-export default function PlayerScreen({ route }) {
+export default function PlayerScreen({ route, navigation }) {
   const { width, height } = useWindowDimensions();
   const scrollViewRef = useRef(null);
   const webAudioRef = useRef(null);
@@ -90,10 +92,10 @@ export default function PlayerScreen({ route }) {
   const pageHorizontalPadding = isTabletLayout ? 56 : 20;
   const pageVerticalPadding = isTabletLayout ? 24 : 16;
   const controlsHeight = isTabletLayout ? 108 : 94;
-  const headerHeight = isTabletLayout ? 120 : 92;
+  const compactHeaderHeight = 48; // Much more compact header
   const availablePageHeight = Math.max(
     320,
-    height - headerHeight - controlsHeight - pageVerticalPadding * 2
+    height - compactHeaderHeight - controlsHeight - pageVerticalPadding * 2
   );
   const measurePageRanges = (() => {
     if (!pages.length || !alignmentMappings.length) {
@@ -249,9 +251,14 @@ export default function PlayerScreen({ route }) {
     };
 
     const handleAnnotationUpdated = ({ annotation }) => {
-      setAnnotations((prev) =>
-        prev.map((a) => (a.id === annotation.id ? annotation : a))
-      );
+      setAnnotations((prev) => {
+        const exists = prev.some((a) => a.id === annotation.id);
+        if (exists) {
+          return prev.map((a) => (a.id === annotation.id ? annotation : a));
+        } else {
+          return [...prev, annotation];
+        }
+      });
     };
     const handleAnnotationDeleted = ({ annotationId }) => {
       setAnnotations((prev) => prev.filter((a) => a.id !== annotationId));
@@ -261,10 +268,15 @@ export default function PlayerScreen({ route }) {
       console.error('Annotation sync error:', error);
     };
 
+    const handleTitleUpdated = ({ title: newTitle }) => {
+      setTitle(newTitle);
+    };
+
     annotationSyncService.on('sync_response', handleSyncResponse);
     annotationSyncService.on('annotation_added', handleAnnotationAdded);
     annotationSyncService.on('annotation_updated', handleAnnotationUpdated);
     annotationSyncService.on('annotation_deleted', handleAnnotationDeleted);
+    annotationSyncService.on('title_updated', handleTitleUpdated);
     annotationSyncService.on('error', handleError);
 
     // Cleanup
@@ -273,6 +285,7 @@ export default function PlayerScreen({ route }) {
       annotationSyncService.off('annotation_added', handleAnnotationAdded);
       annotationSyncService.off('annotation_updated', handleAnnotationUpdated);
       annotationSyncService.off('annotation_deleted', handleAnnotationDeleted);
+      annotationSyncService.off('title_updated', handleTitleUpdated);
       annotationSyncService.off('error', handleError);
       annotationSyncService.disconnect();
     };
@@ -499,6 +512,16 @@ export default function PlayerScreen({ route }) {
     setCurrentPage(nextPage);
   };
 
+  const onScroll = (event) => {
+    // For web compatibility, update page number on scroll as well
+    if (Platform.OS === 'web') {
+      const nextPage = Math.round(event.nativeEvent.contentOffset.x / width);
+      if (nextPage !== currentPage) {
+        setCurrentPage(nextPage);
+      }
+    }
+  };
+
   const updateMeasureFromTime = (timeSeconds) => {
     if (!alignmentMappings.length) {
       return;
@@ -559,18 +582,48 @@ export default function PlayerScreen({ route }) {
 
   // Annotation handlers
   const handleAnnotationCreated = (annotation) => {
-    // Send to server via WebSocket
-    annotationSyncService.addAnnotation(annotation);
+    // If this is a final annotation (after live updates), replace the temporary one
+    if (annotation._isFinal) {
+      // Send final version to server
+      annotationSyncService.addAnnotation(annotation);
 
-    // Optimistically add to local state
-    setAnnotations((prev) => [...prev, annotation]);
+      // Replace temporary with final in local state
+      setAnnotations((prev) => {
+        const withoutTemp = prev.filter((a) => a.id !== annotation.id);
+        return [...withoutTemp, annotation];
+      });
+    } else {
+      // Regular annotation creation (no live updates)
+      annotationSyncService.addAnnotation(annotation);
+      setAnnotations((prev) => [...prev, annotation]);
+    }
   };
 
   const handleAnnotationUpdated = (annotation) => {
-    annotationSyncService.updateAnnotation(annotation);
-    setAnnotations((prev) =>
-      prev.map((a) => (a.id === annotation.id ? annotation : a))
-    );
+    // Check if this is a deletion (marked with _deleted flag)
+    if (annotation._deleted) {
+      annotationSyncService.deleteAnnotation(annotation.id);
+      setAnnotations((prev) => prev.filter((a) => a.id !== annotation.id));
+    } else if (annotation._isTemp) {
+      // This is a temporary live update - send to WebSocket but handle locally
+      annotationSyncService.updateAnnotation(annotation);
+
+      // Add or update in local state
+      setAnnotations((prev) => {
+        const exists = prev.some((a) => a.id === annotation.id);
+        if (exists) {
+          return prev.map((a) => (a.id === annotation.id ? annotation : a));
+        } else {
+          return [...prev, annotation];
+        }
+      });
+    } else {
+      // Regular update
+      annotationSyncService.updateAnnotation(annotation);
+      setAnnotations((prev) =>
+        prev.map((a) => (a.id === annotation.id ? annotation : a))
+      );
+    }
   };
 
   const handleClearAllAnnotations = () => {
@@ -613,6 +666,37 @@ export default function PlayerScreen({ route }) {
     }
   };
 
+  const handleRename = async () => {
+    if (!jobId) {
+      alert('Cannot rename: No job ID available');
+      return;
+    }
+
+    const newTitle = prompt('Enter new title for this score:', title);
+    if (!newTitle || newTitle === title) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/score/${jobId}/title`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ title: newTitle }),
+      });
+
+      if (response.ok) {
+        setTitle(newTitle);
+      } else {
+        const data = await response.json();
+        alert(`Failed to rename: ${data.detail || 'Unknown error'}`);
+      }
+    } catch (error) {
+      alert(`Error renaming score: ${error.message}`);
+    }
+  };
+
   if (!fontsLoaded) {
     return null;
   }
@@ -643,68 +727,61 @@ export default function PlayerScreen({ route }) {
 
   return (
     <SafeAreaView style={styles.container}>
-          {Platform.OS === 'web' ? (
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        muted
-        style={{ display: 'none' }}
-      />
-    ) : null}
-      <View style={styles.headerCard}>
-        <View style={styles.headerTitleRow}>
-          <View style={styles.headerTitleWrap}>
-            <Text style={styles.scoreTitle}>{title}</Text>
-            <Text style={styles.scoreSubtitle}>
-              Read the score in portrait and swipe between paginated pages.
-            </Text>
-          </View>
-          <TouchableOpacity
-            style={styles.shareButton}
-            onPress={handleShare}
-          >
-            <FontAwesomeIcon icon={faShare} size={18} color={COLORS.darkBrown} />
-            <Text style={styles.shareButtonText}>Share</Text>
+      {Platform.OS === 'web' ? (
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          style={{ display: 'none' }}
+        />
+      ) : null}
+
+      {/* Hidden audio element */}
+      {Platform.OS === 'web' && playbackUrl ? (
+        <audio
+          ref={webAudioRef}
+          key={playbackUrl}
+          preload="metadata"
+          src={playbackUrl}
+          onPlay={() => setIsPlaying(true)}
+          onPause={() => setIsPlaying(false)}
+          onEnded={() => setIsPlaying(false)}
+          onTimeUpdate={(event) => updateMeasureFromTime(event.currentTarget.currentTime)}
+          onError={() => {
+            setAudioError('Unable to load the generated audio file.');
+            setIsPlaying(false);
+          }}
+          style={{ display: 'none' }}
+        />
+      ) : null}
+
+      {/* Compact Header with Back Button, Title, Edit, Play, and Share */}
+      <View style={styles.compactHeader}>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+          <FontAwesomeIcon icon={faArrowLeft} size={20} color={COLORS.beige} />
+        </TouchableOpacity>
+        <View style={styles.titleSection}>
+          <Text style={styles.compactTitle} numberOfLines={1}>{title}</Text>
+          <TouchableOpacity onPress={handleRename} style={styles.editButton}>
+            <FontAwesomeIcon icon={faEdit} size={16} color={COLORS.darkBrown} />
           </TouchableOpacity>
         </View>
-        <View style={styles.audioRow}>
-          {Platform.OS === 'web' && playbackUrl ? (
-            <audio
-              ref={webAudioRef}
-              key={playbackUrl}
-              preload="metadata"
-              src={playbackUrl}
-              onPlay={() => setIsPlaying(true)}
-              onPause={() => setIsPlaying(false)}
-              onEnded={() => setIsPlaying(false)}
-              onTimeUpdate={(event) => updateMeasureFromTime(event.currentTarget.currentTime)}
-              onError={() => {
-                setAudioError('Unable to load the generated audio file.');
-                setIsPlaying(false);
-              }}
-              style={styles.webAudioElement}
-            />
-          ) : null}
+        <View style={styles.headerActions}>
           <TouchableOpacity
-            style={[styles.audioButton, !audioUrl && styles.audioButtonDisabled]}
+            style={[styles.compactPlayButton, !audioUrl && styles.compactPlayButtonDisabled]}
             onPress={togglePlayback}
             disabled={!audioUrl}
           >
             <FontAwesomeIcon
               icon={isPlaying ? faPause : faPlay}
-              size={18}
+              size={16}
               color={COLORS.beige}
             />
-            <Text style={styles.audioButtonText}>{isPlaying ? 'Pause Audio' : 'Play Audio'}</Text>
           </TouchableOpacity>
-          <Text style={styles.audioHint}>
-            {audioUrl ? 'Playback uses the generated full-score MP3.' : 'Audio is still loading.'}
-          </Text>
-          {activeMeasure !== null ? (
-            <Text style={styles.measureHint}>Following measure {activeMeasure}</Text>
-          ) : null}
-          {audioError ? <Text style={styles.audioError}>{audioError}</Text> : null}
+          <TouchableOpacity style={styles.compactShareButton} onPress={handleShare}>
+            <FontAwesomeIcon icon={faShare} size={16} color={COLORS.darkBrown} />
+          </TouchableOpacity>
         </View>
       </View>
 
@@ -747,95 +824,115 @@ export default function PlayerScreen({ route }) {
         horizontal
         style={styles.pageList}
         contentContainerStyle={styles.pageListContent}
+        onScroll={onScroll}
+        scrollEventThrottle={16}
         onMomentumScrollEnd={onMomentumScrollEnd}
         showsHorizontalScrollIndicator={false}
         scrollEnabled={!annotationsEnabled}
       >
-        {pages.map((item) => (
-          <View
-            key={`${cacheToken}-${item.page_number}`}
-            style={[
-              styles.pageWrapper,
-              {
-                width,
-                paddingHorizontal: pageHorizontalPadding,
-                paddingBottom: pageVerticalPadding,
-              },
-            ]}
-          >
+        {pages.map((item) => {
+          const containerWidth = width - pageHorizontalPadding * 2 - (isTabletLayout ? 40 : 28);
+          const containerHeight = availablePageHeight - (isTabletLayout ? 80 : 70);
+          
+          const imageWidth = item.width || 1240;
+          const imageHeight = item.height || 1754;
+          
+          const scale = Math.min(containerWidth / imageWidth, containerHeight / imageHeight);
+          const displayedWidth = imageWidth * scale;
+          const displayedHeight = imageHeight * scale;
+
+          return (
             <View
+              key={`${cacheToken}-${item.page_number}`}
               style={[
-                styles.pageCard,
+                styles.pageWrapper,
                 {
-                  minHeight: availablePageHeight,
-                  padding: isTabletLayout ? 20 : 14,
+                  width,
+                  paddingHorizontal: pageHorizontalPadding,
+                  paddingBottom: pageVerticalPadding,
                 },
               ]}
             >
-              <Text style={styles.pageLabel}>Page {item.page_number}</Text>
-              {(() => {
-                const range = measurePageRanges[item.page_number - 1];
-                const isActiveRange =
-                  range &&
-                  activeMeasure !== null &&
-                  activeMeasure >= range.startMeasure &&
-                  activeMeasure <= range.endMeasure;
-                const measuresOnPage = range ? Math.max(1, range.endIndex - range.startIndex + 1) : 1;
-                const activeIndexWithinPage =
-                  isActiveRange && range ? activeMeasure - range.startMeasure : 0;
-                const bandTopPercent =
-                  range && isActiveRange ? (activeIndexWithinPage / measuresOnPage) * 100 : 0;
-                const bandHeightPercent = Math.max(12, 100 / measuresOnPage);
-
-                return (
-                  <>
-                    {range ? (
-                      <Text style={styles.measureRangeLabel}>
-                        Measures {range.startMeasure}-{range.endMeasure}
-                      </Text>
-                    ) : null}
-                    {isActiveRange ? (
-                      <View
-                        pointerEvents="none"
-                        style={[
-                          styles.measureOverlay,
-                          {
-                            top: `${Math.min(88, bandTopPercent)}%`,
-                            height: `${Math.min(28, bandHeightPercent)}%`,
-                          },
-                        ]}
-                      />
-                    ) : null}
-                  </>
-                );
-              })()}
-              <Image
-                source={{ uri: item.uri }}
+              <View
                 style={[
-                  styles.pageImage,
+                  styles.pageCard,
                   {
-                    minHeight: availablePageHeight - (isTabletLayout ? 80 : 70),
+                    minHeight: availablePageHeight,
+                    padding: isTabletLayout ? 20 : 14,
                   },
                 ]}
-                resizeMode="contain"
-              />
+              >
+                <Text style={styles.pageLabel}>Page {item.page_number}</Text>
+                {(() => {
+                  const range = measurePageRanges[item.page_number - 1];
+                  const isActiveRange =
+                    range &&
+                    activeMeasure !== null &&
+                    activeMeasure >= range.startMeasure &&
+                    activeMeasure <= range.endMeasure;
+                  const measuresOnPage = range ? Math.max(1, range.endIndex - range.startIndex + 1) : 1;
+                  const activeIndexWithinPage =
+                    isActiveRange && range ? activeMeasure - range.startMeasure : 0;
+                  const bandTopPercent =
+                    range && isActiveRange ? (activeIndexWithinPage / measuresOnPage) * 100 : 0;
+                  const bandHeightPercent = Math.max(12, 100 / measuresOnPage);
 
-              {/* Annotation Layer */}
-              <AnnotationLayer
-                pageNumber={item.page_number}
-                width={width - pageHorizontalPadding * 2 - (isTabletLayout ? 40 : 28)}
-                height={availablePageHeight - (isTabletLayout ? 80 : 70)}
-                annotations={annotations}
-                currentTool={currentTool}
-                currentColor={currentColor}
-                currentStrokeWidth={currentStrokeWidth}
-                onAnnotationCreated={handleAnnotationCreated}
-                onAnnotationUpdated={handleAnnotationUpdated}
-                enabled={annotationsEnabled && currentPage === item.page_number - 1}
-              />
+                  return (
+                    <>
+                      {range ? (
+                        <Text style={styles.measureRangeLabel}>
+                          Measures {range.startMeasure}-{range.endMeasure}
+                        </Text>
+                      ) : null}
+
+                      <View style={styles.imageContainer}>
+                        <Image
+                          source={{ uri: item.uri }}
+                          style={[
+                            styles.pageImage,
+                            {
+                              width: displayedWidth,
+                              height: displayedHeight,
+                            },
+                          ]}
+                          resizeMode="contain"
+                        />
+
+                        {isActiveRange ? (
+                          <View
+                            pointerEvents="none"
+                            style={[
+                              styles.measureOverlay,
+                              {
+                                top: `${Math.min(88, bandTopPercent)}%`,
+                                height: `${Math.min(28, bandHeightPercent)}%`,
+                                width: displayedWidth,
+                              },
+                            ]}
+                          />
+                        ) : null}
+
+                        {/* Annotation Layer */}
+                        <AnnotationLayer
+                          pageNumber={item.page_number}
+                          width={displayedWidth}
+                          height={displayedHeight}
+                          annotations={annotations}
+                          currentTool={currentTool}
+                          currentColor={currentColor}
+                          currentStrokeWidth={currentStrokeWidth}
+                          onAnnotationCreated={handleAnnotationCreated}
+                          onAnnotationUpdated={handleAnnotationUpdated}
+                          enabled={annotationsEnabled && currentPage === item.page_number - 1}
+                        />
+                      </View>
+                    </>
+                  );
+                })()}
+              </View>
             </View>
-          </View>
-        ))}
+          );
+        })}
       </ScrollView>
 
       <View
@@ -886,91 +983,65 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: COLORS.beige,
   },
-  headerCard: {
-    marginHorizontal: 20,
-    marginTop: 20,
-    marginBottom: 10,
-    padding: 18,
-    backgroundColor: '#F2ECE2',
-    borderRadius: 14,
-  },
-  headerTitleRow: {
+  compactHeader: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 14,
+    backgroundColor: COLORS.lightBrown,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    height: 48,
+    gap: 12,
   },
-  headerTitleWrap: {
-    flex: 1,
+  backButton: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  scoreTitle: {
-    fontFamily: 'Afacad_400Regular',
-    fontSize: 28,
-    color: COLORS.darkBrown,
-  },
-  scoreSubtitle: {
-    fontFamily: 'Afacad_400Regular',
-    fontSize: 16,
-    color: COLORS.lightBrown,
-    marginTop: 6,
-  },
-  shareButton: {
+  titleSection: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    backgroundColor: COLORS.beige,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 8,
-    marginLeft: 12,
+    flex: 1,
   },
-  shareButtonText: {
-    fontFamily: 'Afacad_400Regular',
-    fontSize: 16,
-    color: COLORS.darkBrown,
-  },
-  audioRow: {
-    marginTop: 14,
-  },
-  audioButton: {
-    alignSelf: 'flex-start',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    backgroundColor: COLORS.darkBrown,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 999,
-  },
-  audioButtonDisabled: {
-    opacity: 0.5,
-  },
-  audioButtonText: {
+  compactTitle: {
     fontFamily: 'Afacad_400Regular',
     fontSize: 18,
     color: COLORS.beige,
+    flex: 1,
   },
-  audioHint: {
-    fontFamily: 'Afacad_400Regular',
-    fontSize: 15,
-    color: COLORS.lightBrown,
-    marginTop: 8,
+  editButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: COLORS.beige,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  measureHint: {
-    fontFamily: 'Afacad_400Regular',
-    fontSize: 16,
-    color: COLORS.darkBrown,
-    marginTop: 6,
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
-  audioError: {
-    fontFamily: 'Afacad_400Regular',
-    fontSize: 15,
-    color: '#A54C36',
-    marginTop: 6,
+  compactPlayButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: COLORS.darkBrown,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  webAudioElement: {
-    width: '100%',
-    marginBottom: 10,
+  compactPlayButtonDisabled: {
+    opacity: 0.5,
+  },
+  compactShareButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: COLORS.beige,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   pageList: {
     flex: 1,
@@ -1018,9 +1089,14 @@ const styles = StyleSheet.create({
     zIndex: 2,
   },
   pageImage: {
+    position: 'relative',
+  },
+  imageContainer: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    position: 'relative',
     width: '100%',
     flex: 1,
-    minHeight: 320,
   },
   controlsContainer: {
     backgroundColor: COLORS.lightBrown,
