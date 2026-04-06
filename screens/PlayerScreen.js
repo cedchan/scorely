@@ -95,11 +95,13 @@ export default function PlayerScreen({ route, navigation }) {
   const isTabletLayout = width >= 900;
   const pageHorizontalPadding = isTabletLayout ? 56 : 20;
   const pageVerticalPadding = isTabletLayout ? 24 : 16;
+  const pageTopPadding = isTabletLayout ? 32 : 24;
   const controlsHeight = isTabletLayout ? 108 : 94;
-  const compactHeaderHeight = 48; // Much more compact header
+  const compactHeaderHeight = 56; // Header height
+  const toolbarHeight = 58; // Annotation toolbar height (padding 10*2 + content ~38)
   const availablePageHeight = Math.max(
     320,
-    height - compactHeaderHeight - controlsHeight - pageVerticalPadding * 2
+    height - compactHeaderHeight - toolbarHeight - controlsHeight - pageVerticalPadding - pageTopPadding
   );
   const measurePageRanges = (() => {
     if (!pages.length || !alignmentMappings.length) {
@@ -967,12 +969,13 @@ export default function PlayerScreen({ route, navigation }) {
         scrollEnabled={!annotationsEnabled}
       >
         {pages.map((item) => {
-          const containerWidth = width - pageHorizontalPadding * 2 - (isTabletLayout ? 40 : 28);
-          const containerHeight = availablePageHeight - (isTabletLayout ? 80 : 70);
-          
+          // Use full available space now that labels are removed
+          const containerWidth = width - pageHorizontalPadding * 2;
+          const containerHeight = availablePageHeight;
+
           const imageWidth = item.width || 1240;
           const imageHeight = item.height || 1754;
-          
+
           const scale = Math.min(containerWidth / imageWidth, containerHeight / imageHeight);
           const displayedWidth = imageWidth * scale;
           const displayedHeight = imageHeight * scale;
@@ -994,11 +997,10 @@ export default function PlayerScreen({ route, navigation }) {
                   styles.pageCard,
                   {
                     minHeight: availablePageHeight,
-                    padding: isTabletLayout ? 20 : 14,
+                    padding: 0,
                   },
                 ]}
               >
-                <Text style={styles.pageLabel}>Page {item.page_number}</Text>
                 {(() => {
                   const range = measurePageRanges[item.page_number - 1];
                   const isActiveRange =
@@ -1015,12 +1017,6 @@ export default function PlayerScreen({ route, navigation }) {
 
                   return (
                     <>
-                      {range ? (
-                        <Text style={styles.measureRangeLabel}>
-                          Measures {range.startMeasure}-{range.endMeasure}
-                        </Text>
-                      ) : null}
-
                       <View style={styles.imageContainer}>
                         <Image
                           source={{ uri: item.uri }}
@@ -1051,8 +1047,12 @@ export default function PlayerScreen({ route, navigation }) {
                         {/* Annotation Layer */}
                         <AnnotationLayer
                           pageNumber={item.page_number}
-                          width={displayedWidth}
-                          height={displayedHeight}
+                          width={containerWidth}
+                          height={containerHeight}
+                          imageWidth={displayedWidth}
+                          imageHeight={displayedHeight}
+                          imageOffsetX={(containerWidth - displayedWidth) / 2}
+                          imageOffsetY={(containerHeight - displayedHeight) / 2}
                           annotations={annotations}
                           currentTool={currentTool}
                           currentColor={currentColor}
@@ -1125,8 +1125,8 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     backgroundColor: COLORS.lightBrown,
     paddingHorizontal: 16,
-    paddingVertical: 12,
-    height: 48,
+    paddingVertical: 24,
+    height: 72,
     gap: 12,
   },
   backButton: {

@@ -12,6 +12,10 @@ export default function AnnotationLayer({
   pageNumber,
   width,
   height,
+  imageWidth,
+  imageHeight,
+  imageOffsetX = 0,
+  imageOffsetY = 0,
   annotations,
   currentTool,
   currentColor,
@@ -21,11 +25,16 @@ export default function AnnotationLayer({
   enabled = true,
   style,
 }) {
+  // Use image dimensions for coordinate normalization, container dimensions for drawing area
+  const normalizeWidth = imageWidth || width;
+  const normalizeHeight = imageHeight || height;
   const [currentPathPoints, setCurrentPathPoints] = useState([]);
   const currentPathPointsRef = useRef([]);
   const annotationsToEraseRef = useRef([]);
   const tempAnnotationIdRef = useRef(null);
   const updateThrottleRef = useRef(null);
+  const lastUpdateTimeRef = useRef(0);
+  const pendingUpdateRef = useRef(null);
 
   // Keep ref updated with current points
   useEffect(() => {
@@ -55,16 +64,31 @@ export default function AnnotationLayer({
   };
 
   const sendThrottledLiveUpdate = (points) => {
-    // Clear existing throttle
-    if (updateThrottleRef.current) {
-      clearTimeout(updateThrottleRef.current);
-    }
+    const now = Date.now();
+    const timeSinceLastUpdate = now - lastUpdateTimeRef.current;
+    const UPDATE_INTERVAL = 16; // ~60fps (16ms)
 
-    // Throttle updates to every 50ms
-    updateThrottleRef.current = setTimeout(() => {
+    // Store pending update
+    pendingUpdateRef.current = points;
+
+    // If enough time has passed, send immediately
+    if (timeSinceLastUpdate >= UPDATE_INTERVAL) {
       sendLiveUpdate(points);
-      updateThrottleRef.current = null;
-    }, 50);
+      lastUpdateTimeRef.current = now;
+      pendingUpdateRef.current = null;
+    } else {
+      // Schedule update for next interval
+      if (!updateThrottleRef.current) {
+        updateThrottleRef.current = setTimeout(() => {
+          if (pendingUpdateRef.current) {
+            sendLiveUpdate(pendingUpdateRef.current);
+            lastUpdateTimeRef.current = Date.now();
+            pendingUpdateRef.current = null;
+          }
+          updateThrottleRef.current = null;
+        }, UPDATE_INTERVAL - timeSinceLastUpdate);
+      }
+    }
   };
 
   const checkForAnnotationsToErase = (x, y) => {
@@ -82,9 +106,9 @@ export default function AnnotationLayer({
       // Check if eraser touches this annotation
       if (annotation.type === 'path' && annotation.path) {
         const touched = annotation.path.points.some((point) => {
-          // Convert point from percentage to pixels
-          const pointX = (point.x / 100) * width;
-          const pointY = (point.y / 100) * height;
+          // Convert point from percentage to pixels using image dimensions, then add offset
+          const pointX = (point.x / 100) * normalizeWidth + imageOffsetX;
+          const pointY = (point.y / 100) * normalizeHeight + imageOffsetY;
           const distance = Math.sqrt(
             Math.pow(pointX - x, 2) + Math.pow(pointY - y, 2)
           );
@@ -111,10 +135,13 @@ export default function AnnotationLayer({
       const { locationX, locationY } = event.nativeEvent;
 
       if (currentTool === 'pen') {
-        // Start new path - store as percentages
+        // Adjust for image offset and store as percentages relative to image dimensions
+        const adjustedX = locationX - imageOffsetX;
+        const adjustedY = locationY - imageOffsetY;
+
         const initialPoints = [{
-          x: (locationX / width) * 100,
-          y: (locationY / height) * 100
+          x: (adjustedX / normalizeWidth) * 100,
+          y: (adjustedY / normalizeHeight) * 100
         }];
         setCurrentPathPoints(initialPoints);
 
@@ -136,12 +163,15 @@ export default function AnnotationLayer({
       const { locationX, locationY } = event.nativeEvent;
 
       if (currentTool === 'pen') {
-        // Add point to current path - store as percentages
+        // Adjust for image offset and store as percentages relative to image dimensions
+        const adjustedX = locationX - imageOffsetX;
+        const adjustedY = locationY - imageOffsetY;
+
         const newPoints = [
           ...currentPathPointsRef.current,
           {
-            x: (locationX / width) * 100,
-            y: (locationY / height) * 100
+            x: (adjustedX / normalizeWidth) * 100,
+            y: (adjustedY / normalizeHeight) * 100
           },
         ];
         setCurrentPathPoints(newPoints);
@@ -213,15 +243,15 @@ export default function AnnotationLayer({
   const pointsToPathString = (points) => {
     if (!points || points.length === 0) return '';
 
-    // Convert first point from percentage to pixels
-    const firstX = (points[0].x / 100) * width;
-    const firstY = (points[0].y / 100) * height;
+    // Convert first point from percentage to pixels using image dimensions, then add offset
+    const firstX = (points[0].x / 100) * normalizeWidth + imageOffsetX;
+    const firstY = (points[0].y / 100) * normalizeHeight + imageOffsetY;
     let pathString = `M ${firstX} ${firstY}`;
 
     for (let i = 1; i < points.length; i++) {
-      // Convert each point from percentage to pixels
-      const px = (points[i].x / 100) * width;
-      const py = (points[i].y / 100) * height;
+      // Convert each point from percentage to pixels using image dimensions, then add offset
+      const px = (points[i].x / 100) * normalizeWidth + imageOffsetX;
+      const py = (points[i].y / 100) * normalizeHeight + imageOffsetY;
       pathString += ` L ${px} ${py}`;
     }
 
@@ -262,8 +292,8 @@ export default function AnnotationLayer({
             return (
               <SvgText
                 key={annotation.id}
-                x={(annotation.text.position.x / 100) * width}
-                y={(annotation.text.position.y / 100) * height}
+                x={(annotation.text.position.x / 100) * normalizeWidth + imageOffsetX}
+                y={(annotation.text.position.y / 100) * normalizeHeight + imageOffsetY}
                 fontSize={annotation.text.fontSize}
                 fill={annotation.text.color}
                 fontFamily="Afacad_400Regular"
@@ -275,10 +305,10 @@ export default function AnnotationLayer({
 
           if (annotation.type === 'shape' && annotation.shape) {
             const { shapeType, bounds, color, strokeWidth } = annotation.shape;
-            const x = (bounds.x / 100) * width;
-            const y = (bounds.y / 100) * height;
-            const w = (bounds.width / 100) * width;
-            const h = (bounds.height / 100) * height;
+            const x = (bounds.x / 100) * normalizeWidth + imageOffsetX;
+            const y = (bounds.y / 100) * normalizeHeight + imageOffsetY;
+            const w = (bounds.width / 100) * normalizeWidth;
+            const h = (bounds.height / 100) * normalizeHeight;
 
             if (shapeType === 'circle') {
               const radius = Math.min(w, h) / 2;

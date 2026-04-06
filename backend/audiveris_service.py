@@ -69,12 +69,14 @@ class AudiverisService:
 
         if self.in_docker:
             # Running inside Docker - call Audiveris container via docker exec
-            # Convert paths to container paths
-            container_pdf = f"/audiveris/input/{pdf_path.name}"
-            container_output = "/audiveris/output"
+            # Convert paths to container paths (cloud/job-id/file.pdf -> /audiveris/cloud/job-id/file.pdf)
+            relative_pdf = pdf_path.relative_to(Path.cwd())
+            relative_output = output_dir.relative_to(Path.cwd())
+            container_pdf = f"/audiveris/{relative_pdf}"
+            container_output = f"/audiveris/{relative_output}"
 
             cmd = [
-                'docker', 'exec', 
+                'docker', 'exec',
                 '-e', 'JAVA_OPTS=-Xmx4g',
                 'scorely-audiveris',
                 'audiveris',

@@ -39,10 +39,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-UPLOAD_DIR = Path("uploads")
-OUTPUT_DIR = Path("outputs")
-UPLOAD_DIR.mkdir(exist_ok=True)
-OUTPUT_DIR.mkdir(exist_ok=True)
+CLOUD_DIR = Path("cloud")
+CLOUD_DIR.mkdir(exist_ok=True)
 
 # In-memory job tracking
 jobs: Dict[str, dict] = {}
@@ -53,7 +51,7 @@ share_codes: Dict[str, str] = {}
 
 def get_job_dir(job_id: str) -> Path:
     """Get the directory for a specific job, creating it if needed."""
-    job_dir = OUTPUT_DIR / job_id
+    job_dir = CLOUD_DIR / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
     return job_dir
 
@@ -513,21 +511,9 @@ def run_full_pipeline(job_id: str, pdf_path: Path):
         if audiveris_service is None:
             raise RuntimeError("Audiveris is not available. Start the Docker stack first.")
 
-        # 1. Transcribe PDF to MusicXML (Audiveris outputs to flat outputs/ dir)
-        mxl_output_str = audiveris_service.transcribe_pdf(str(pdf_path), str(OUTPUT_DIR))
+        # 1. Transcribe PDF to MusicXML (Audiveris now outputs directly to job_dir)
+        mxl_output_str = audiveris_service.transcribe_pdf(str(pdf_path), str(job_dir))
         mxl_output_path = Path(mxl_output_str)
-
-        # Move all related files from outputs/ to outputs/{job_id}/
-        # Audiveris creates: {job_id}.mxl, {job_id}.mvt*.mxl, {job_id}.omr, {job_id}-*.log
-        for file_pattern in [f"{job_id}*"]:
-            for file_path in OUTPUT_DIR.glob(file_pattern):
-                if file_path.is_file():
-                    dest_path = job_dir / file_path.name
-                    logger.info(f"Moving {file_path} to {dest_path}")
-                    shutil.move(str(file_path), str(dest_path))
-
-        # Update mxl_output_path to new location
-        mxl_output_path = job_dir / mxl_output_path.name
 
         # Ensure filename is canonical (job_id.mxl)
         canonical_path = job_dir / f"{job_id}.mxl"
@@ -562,31 +548,63 @@ async def root():
 
 @app.post("/api/transcribe", response_model=TranscriptionResponse)
 async def transcribe_pdf(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
-    if not file.filename or not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No filename provided")
+
+    filename_lower = file.filename.lower()
+    is_pdf = filename_lower.endswith(".pdf")
+    is_mxl = filename_lower.endswith(".mxl") or filename_lower.endswith(".musicxml")
+
+    if not (is_pdf or is_mxl):
+        raise HTTPException(status_code=400, detail="Only PDF and MusicXML (.mxl) files are supported")
 
     job_id = str(uuid.uuid4())
-    pdf_path = UPLOAD_DIR / f"{job_id}.pdf"
+
+    # Create job directory first
+    job_dir = get_job_dir(job_id)
 
     # Extract filename without extension as default title
     original_filename = Path(file.filename).stem
 
-    logger.info("Received PDF for job %s: %s", job_id, file.filename)
+    logger.info("Received file for job %s: %s", job_id, file.filename)
 
-    async with aiofiles.open(pdf_path, "wb") as out_file:
-        content = await file.read()
-        await out_file.write(content)
+    # Save file directly to job folder
+    content = await file.read()
 
-    jobs[job_id] = {
-        "status": "processing",
-        "progress": {"transcription": "queued", "audio_conversion": "not_started"},
-        "files": {"musicxml": None, "score_pages": None, "parts": []},
-        "original_filename": original_filename,
-    }
+    if is_mxl:
+        # MusicXML file - skip transcription, go straight to rendering and audio
+        mxl_path = job_dir / f"{job_id}.mxl"
+        async with aiofiles.open(mxl_path, "wb") as out_file:
+            await out_file.write(content)
 
-    background_tasks.add_task(run_full_pipeline, job_id, pdf_path)
+        jobs[job_id] = {
+            "status": "processing",
+            "progress": {"transcription": "completed", "audio_conversion": "queued"},
+            "files": {"musicxml": f"/api/download/{job_id}/{job_id}.mxl", "score_pages": None, "parts": []},
+            "original_filename": original_filename,
+        }
 
-    return {"job_id": job_id, "status": "queued", "message": "Transcription started."}
+        # Skip PDF transcription, go straight to rendering and audio
+        background_tasks.add_task(render_score_pages, job_id, mxl_path)
+        background_tasks.add_task(run_audio_pipeline, job_id, mxl_path)
+
+        return {"job_id": job_id, "status": "queued", "message": "Processing MusicXML file."}
+    else:
+        # PDF file - run full pipeline with Audiveris transcription
+        pdf_path = job_dir / f"{job_id}.pdf"
+        async with aiofiles.open(pdf_path, "wb") as out_file:
+            await out_file.write(content)
+
+        jobs[job_id] = {
+            "status": "processing",
+            "progress": {"transcription": "queued", "audio_conversion": "not_started"},
+            "files": {"musicxml": None, "score_pages": None, "parts": []},
+            "original_filename": original_filename,
+        }
+
+        background_tasks.add_task(run_full_pipeline, job_id, pdf_path)
+
+        return {"job_id": job_id, "status": "queued", "message": "Transcription started."}
 
 
 @app.get("/api/status/{job_id}", response_model=JobStatusResponse)

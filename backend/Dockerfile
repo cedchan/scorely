@@ -29,8 +29,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Create necessary directories
-RUN mkdir -p uploads outputs outputs/annotations
+# Create cloud directory (jobs are created dynamically)
+RUN mkdir -p cloud
 
 # Expose port
 EXPOSE 8000

@@ -9,8 +9,7 @@ services:
       - "8000:8000"
     volumes:
       - ./backend:/app
-      - ./backend/uploads:/app/uploads
-      - ./backend/outputs:/app/outputs
+      - ./backend/cloud:/app/cloud
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - AUDIVERIS_HOST=audiveris
@@ -28,9 +27,8 @@ services:
       dockerfile: backend/Dockerfile.audiveris
     container_name: scorely-audiveris
     volumes:
-      # Shared directory for PDFs and MusicXML outputs
-      - ./backend/uploads:/audiveris/input
-      - ./backend/outputs:/audiveris/output
+      # Shared cloud directory for PDFs and MusicXML outputs
+      - ./backend/cloud:/audiveris/cloud
     environment:
       - TESSDATA_PREFIX=/usr/share/tessdata
     networks:
@@ -42,5 +40,4 @@ networks:
     driver: bridge
 
 volumes:
-  uploads:
-  outputs:
+  cloud:

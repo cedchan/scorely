@@ -48,28 +48,37 @@ const DEFAULT_PROJECTS = [
     action: 'join',
   },
   {
-    id: 'project-empty-1',
-    title: 'Untitled Score',
+    id: 'project-demo-1',
+    title: 'Demo Score 1',
     subtitle: null,
     icon: faMusic,
     tone: 'neutral',
-    action: 'placeholder',
+    action: 'open',
+    jobId: '8f8216e9-6030-41ce-a5c9-a84f1b4734fc',
+    musicxmlPath: '/api/download/8f8216e9-6030-41ce-a5c9-a84f1b4734fc/8f8216e9-6030-41ce-a5c9-a84f1b4734fc.mxl',
+    pageManifestPath: '/api/score-pages/8f8216e9-6030-41ce-a5c9-a84f1b4734fc',
   },
   {
-    id: 'project-empty-2',
-    title: 'Untitled Score',
+    id: 'project-demo-2',
+    title: 'Demo Score 2',
     subtitle: null,
     icon: faMusic,
     tone: 'neutral',
-    action: 'placeholder',
+    action: 'open',
+    jobId: '8f8216e9-6030-41ce-a5c9-a84f1b4734fc',
+    musicxmlPath: '/api/download/8f8216e9-6030-41ce-a5c9-a84f1b4734fc/8f8216e9-6030-41ce-a5c9-a84f1b4734fc.mxl',
+    pageManifestPath: '/api/score-pages/8f8216e9-6030-41ce-a5c9-a84f1b4734fc',
   },
   {
-    id: 'project-empty-3',
-    title: 'Untitled Score',
+    id: 'project-demo-3',
+    title: 'Demo Score 3',
     subtitle: null,
     icon: faMusic,
     tone: 'neutral',
-    action: 'placeholder',
+    action: 'open',
+    jobId: '8f8216e9-6030-41ce-a5c9-a84f1b4734fc',
+    musicxmlPath: '/api/download/8f8216e9-6030-41ce-a5c9-a84f1b4734fc/8f8216e9-6030-41ce-a5c9-a84f1b4734fc.mxl',
+    pageManifestPath: '/api/score-pages/8f8216e9-6030-41ce-a5c9-a84f1b4734fc',
   },
 ];
 
@@ -263,18 +272,21 @@ export default function UploadScreen({ navigation }) {
 
   const uploadPdf = async (fileAsset) => {
     const formData = new FormData();
+    const isMusicXML = fileAsset.name?.toLowerCase().endsWith('.mxl') ||
+                       fileAsset.name?.toLowerCase().endsWith('.musicxml');
+
     if (Platform.OS === 'web' && fileAsset.file) {
       formData.append('file', fileAsset.file, fileAsset.name || 'score.pdf');
     } else {
       formData.append('file', {
         uri: fileAsset.uri,
         name: fileAsset.name || 'score.pdf',
-        type: fileAsset.mimeType || 'application/pdf',
+        type: fileAsset.mimeType || (isMusicXML ? 'application/vnd.recordare.musicxml+xml' : 'application/pdf'),
       });
     }
 
     setIsLoading(true);
-    setStatusText('Uploading PDF to the backend...');
+    setStatusText(isMusicXML ? 'Uploading MusicXML to the backend...' : 'Uploading PDF to the backend...');
 
     try {
       const response = await fetch(`${apiBaseUrl}/api/transcribe`, {
@@ -288,7 +300,7 @@ export default function UploadScreen({ navigation }) {
       }
 
       setJobId(data.job_id);
-      setStatusText('Upload complete. Waiting for transcription...');
+      setStatusText(isMusicXML ? 'Processing MusicXML file...' : 'Upload complete. Waiting for transcription...');
       pollJobStatus(data.job_id, fileAsset.name || 'Uploaded score');
     } catch (error) {
       setIsLoading(false);
@@ -305,7 +317,9 @@ export default function UploadScreen({ navigation }) {
       const result = await DocumentPicker.getDocumentAsync({
         base64: false,
         copyToCacheDirectory: true,
-        type: 'application/pdf',
+        type: Platform.OS === 'web'
+          ? ['application/pdf', '.mxl', '.musicxml']  // Web accepts extensions
+          : '*/*',  // Native lets us filter afterward
       });
 
       if (result.canceled) {
@@ -313,11 +327,23 @@ export default function UploadScreen({ navigation }) {
       }
 
       const fileAsset = result.assets[0];
+
+      // Validate file type
+      const validExtensions = ['.pdf', '.mxl', '.musicxml'];
+      const hasValidExtension = validExtensions.some(ext =>
+        fileAsset.name?.toLowerCase().endsWith(ext)
+      );
+
+      if (!hasValidExtension) {
+        Alert.alert('Invalid File', 'Please select a PDF or MusicXML (.mxl) file.');
+        return;
+      }
+
       setSelectedFile(fileAsset);
       clearPollTimer();
       uploadPdf(fileAsset);
     } catch (err) {
-      Alert.alert('Picker Error', 'There was a problem choosing your PDF.');
+      Alert.alert('Picker Error', 'There was a problem choosing your file.');
     }
   };
 
@@ -450,7 +476,7 @@ export default function UploadScreen({ navigation }) {
                 color={COLORS.primary}
               />
               <Text style={styles.statusLabel}>
-                {selectedFile ? `Selected file: ${selectedFile.name}` : 'Supported format: PDF'}
+                {selectedFile ? `Selected file: ${selectedFile.name}` : 'Supported formats: PDF, MXL'}
               </Text>
             </View>
             {isLoading ? <ActivityIndicator color={COLORS.primary} /> : null}

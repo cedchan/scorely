@@ -15,8 +15,8 @@ import y_py as Y
 
 logger = logging.getLogger(__name__)
 
-# Base output directory
-OUTPUT_DIR = Path("outputs")
+# Base cloud directory
+CLOUD_DIR = Path("cloud")
 
 
 # --- DATA MODELS ---
@@ -79,7 +79,7 @@ class AnnotationStore:
 
     def _get_annotation_file(self, job_id: str) -> Path:
         """Get path to annotation JSON file"""
-        job_dir = OUTPUT_DIR / job_id
+        job_dir = CLOUD_DIR / job_id
         job_dir.mkdir(parents=True, exist_ok=True)
         return job_dir / "annotations.json"
 

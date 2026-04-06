@@ -34,7 +34,7 @@ export default function App() {
         <Stack.Screen
           name="Player"
           component={PlayerScreen}
-          options={{ title: 'Music Player' }}
+          options={{ headerShown: false }}
         />
       </Stack.Navigator>
     </NavigationContainer>
