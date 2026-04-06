@@ -30,11 +30,14 @@ import {
   FilesetResolver, 
   FaceLandmarker 
 } from '@mediapipe/tasks-vision';
+
 const COLORS = {
   beige: '#FAF7F0',
   lightBrown: '#A9988F',
   darkBrown: '#58392F',
 };
+
+const MEDIAPIPE_VERSION = '0.10.34';
 
 const getFallbackApiBaseUrl = () => {
   if (Platform.OS === 'web') {
@@ -80,6 +83,7 @@ export default function PlayerScreen({ route, navigation }) {
   const faceLandmarkerRef = useRef(null);
   const animationFrameRef = useRef(null);
   const [cameraEnabled, setCameraEnabled] = useState(false);
+  const [cameraError, setCameraError] = useState(null);
   const nodPhaseRef = useRef('idle');
   const lastTurnTimeRef = useRef(0);
   const baselineRelativeYRef = useRef(null);
@@ -308,29 +312,130 @@ export default function PlayerScreen({ route, navigation }) {
       }
   
       if (videoRef.current) {
+        videoRef.current.pause?.();
         videoRef.current.srcObject = null;
       }
   
+      faceLandmarkerRef.current?.close?.();
       faceLandmarkerRef.current = null;
       setCameraEnabled(false);
       nodPhaseRef.current = 'idle';
       lastTurnTimeRef.current = 0;
       baselineRelativeYRef.current = null;
     };
+
+    const waitForVideoReady = (videoElement) =>
+      new Promise((resolve, reject) => {
+        if (videoElement.readyState >= 2 && videoElement.videoWidth > 0) {
+          resolve();
+          return;
+        }
+
+        const timeoutId = setTimeout(() => {
+          cleanup();
+          reject(new Error('Camera video did not become ready in time.'));
+        }, 8000);
+
+        const handleReady = () => {
+          if (videoElement.videoWidth > 0) {
+            cleanup();
+            resolve();
+          }
+        };
+
+        const handleError = () => {
+          cleanup();
+          reject(new Error('Unable to read frames from the camera video.'));
+        };
+
+        const cleanup = () => {
+          clearTimeout(timeoutId);
+          videoElement.removeEventListener('loadedmetadata', handleReady);
+          videoElement.removeEventListener('canplay', handleReady);
+          videoElement.removeEventListener('error', handleError);
+        };
+
+        videoElement.addEventListener('loadedmetadata', handleReady);
+        videoElement.addEventListener('canplay', handleReady);
+        videoElement.addEventListener('error', handleError);
+      });
+
+    const getCameraErrorMessage = (err) => {
+      if (
+        typeof window !== 'undefined' &&
+        !window.isSecureContext
+      ) {
+        return 'Camera access on iPad Safari requires HTTPS or localhost. Open this page over HTTPS to use nod detection.';
+      }
+
+      if (err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError') {
+        return 'Camera permission was denied. Allow camera access in Safari and try again.';
+      }
+
+      if (err?.name === 'NotFoundError' || err?.name === 'DevicesNotFoundError') {
+        return 'No front camera was found for nod detection.';
+      }
+
+      if (err?.name === 'NotReadableError' || err?.name === 'TrackStartError') {
+        return 'The camera is already in use by another app or tab.';
+      }
+
+      return err?.message || 'Unable to start the camera for nod detection.';
+    };
+
+    const requestCameraStream = async () => {
+      try {
+        return await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: 'user' },
+            width: { ideal: 640 },
+            height: { ideal: 480 },
+          },
+          audio: false,
+        });
+      } catch (error) {
+        if (
+          error?.name === 'OverconstrainedError' ||
+          error?.name === 'ConstraintNotSatisfiedError'
+        ) {
+          return navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: false,
+          });
+        }
+
+        throw error;
+      }
+    };
   
     const startCameraAndTracking = async () => {
       if (!nodEnabled) {
+        setCameraError(null);
         stopCamera();
         return;
       }
+
+      setCameraError(null);
+
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setCameraError('This browser does not support camera access for nod detection.');
+        stopCamera();
+        return;
+      }
+
+      if (typeof window !== 'undefined' && !window.isSecureContext) {
+        setCameraError(
+          'Camera access on iPad Safari requires HTTPS or localhost. Open this page over HTTPS to use nod detection.'
+        );
+        stopCamera();
+        return;
+      }
+
       console.log('about to request camera');
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'user' },
-          audio: false,
-        });
+        const stream = await requestCameraStream();
         const vision = await FilesetResolver.forVisionTasks(
-          'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm'
+          `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MEDIAPIPE_VERSION}/wasm`
         );
   
         const faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
@@ -344,13 +449,25 @@ export default function PlayerScreen({ route, navigation }) {
   
         faceLandmarkerRef.current = faceLandmarker;
   
-        if (cancelled) return;
+        if (cancelled) {
+          stream.getTracks().forEach((track) => track.stop());
+          faceLandmarker.close?.();
+          return;
+        }
   
         streamRef.current = stream;
   
         if (videoRef.current) {
+          videoRef.current.muted = true;
+          videoRef.current.autoplay = true;
+          videoRef.current.playsInline = true;
+          videoRef.current.setAttribute('muted', 'true');
+          videoRef.current.setAttribute('autoplay', 'true');
+          videoRef.current.setAttribute('playsinline', 'true');
+          videoRef.current.setAttribute('webkit-playsinline', 'true');
           videoRef.current.srcObject = stream;
           await videoRef.current.play();
+          await waitForVideoReady(videoRef.current);
         }
   
         if (cancelled) return;
@@ -401,6 +518,9 @@ export default function PlayerScreen({ route, navigation }) {
         detectFrame();
       } catch (err) {
         console.error('Camera / face tracking error:', err?.name, err?.message, err);
+        if (!cancelled) {
+          setCameraError(getCameraErrorMessage(err));
+        }
         stopCamera();
       }
     };
@@ -733,7 +853,7 @@ export default function PlayerScreen({ route, navigation }) {
           autoPlay
           playsInline
           muted
-          style={{ display: 'none' }}
+          style={styles.hiddenCameraVideo}
         />
       ) : null}
 
@@ -804,6 +924,14 @@ export default function PlayerScreen({ route, navigation }) {
             style={[styles.gestureButton, nodEnabled && styles.gestureButtonActive]}
             onPress={() => {
               console.log('nod button clicked');
+              if (Platform.OS !== 'web') {
+                setCameraError(
+                  'Nod detection currently uses the web camera pipeline. Open the score in Safari over HTTPS on iPad to use the front camera.'
+                );
+                return;
+              }
+
+              setCameraError(null);
               setNodEnabled(!nodEnabled);
             }}          >
             <Text
@@ -817,6 +945,14 @@ export default function PlayerScreen({ route, navigation }) {
           </TouchableOpacity>
         </View>
       </View>
+
+      {(cameraError || (nodEnabled && !cameraEnabled)) ? (
+        <View style={styles.cameraStatusRow}>
+          <Text style={styles.cameraStatusText}>
+            {cameraError || 'Starting front camera for nod detection...'}
+          </Text>
+        </View>
+      ) : null}
 
       <ScrollView
         ref={scrollViewRef}
@@ -1043,6 +1179,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  hiddenCameraVideo: {
+    position: 'absolute',
+    top: -1000,
+    left: -1000,
+    width: 1,
+    height: 1,
+    opacity: 0,
+    pointerEvents: 'none',
+  },
   pageList: {
     flex: 1,
   },
@@ -1159,6 +1304,16 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     marginBottom: 10,
     backgroundColor: COLORS.lightBrown,
+  },
+  cameraStatusRow: {
+    paddingHorizontal: 20,
+    marginTop: -4,
+    marginBottom: 10,
+  },
+  cameraStatusText: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 14,
+    color: COLORS.darkBrown,
   },
   
   gestureButton: {

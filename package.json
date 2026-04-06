@@ -4,10 +4,10 @@
   "description": "iPad app for reading and rehearsing chamber music",
   "main": "node_modules/expo/AppEntry.js",
   "scripts": {
-    "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
-    "web": "expo start --web"
+    "start": "expo start --host lan",
+    "android": "expo start --android --host lan",
+    "ios": "expo start --ios --host lan",
+    "web": "expo start --web --host lan"
   },
   "keywords": [],
   "author": "",
