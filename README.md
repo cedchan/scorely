@@ -266,15 +266,3 @@ So make sure Docker Desktop is installed and running.
 ### Expo starts but the iPad still shows an older build
 
 Close the old Safari tab and reopen the latest HTTPS tunnel URL. If the issue persists, clear the saved `loca.lt` website data on the iPad and try again.
-
-## Suggested demo order for a submission
-
-1. Run `hello-world/` to show `Hello World` on iPad.
-2. Navigate to the styles screen to show colors, typography, and icons.
-3. Run `ENABLE_TUNNELS=1 ./start.sh` from the repo root.
-4. Open the printed HTTPS app URL on the iPad.
-5. Upload `demo-files/cello1.pdf` to demonstrate transcription.
-6. Upload `demo-files/String Quartet in A minor, Op.2548 (Beatty, Stephen W.).mxl` to demonstrate direct electronic-format ingest.
-7. Show paginated score display and playback.
-8. Open the same score on a second device and demonstrate shared annotations.
-9. Enable `Nod to Turn Page` and demonstrate gesture-based page turning.
