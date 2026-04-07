@@ -79,7 +79,9 @@ start_localtunnel() {
 
         tunnel_url="$(grep -m1 'your url is:' "${log_file}" | sed 's/.*your url is: //')"
         if [[ -n "${tunnel_url}" ]]; then
-            printf '%s\n%s\n' "${pid}" "${log_file}" "${tunnel_url}"
+            echo "${pid}"
+            echo "${log_file}"
+            echo "${tunnel_url}"
             return 0
         fi
 
@@ -135,15 +137,17 @@ if [[ "${ENABLE_TUNNELS}" == "1" ]]; then
     echo ""
     echo "🔐 Starting HTTPS tunnels for remote/iPad access..."
 
-    mapfile -t api_tunnel_data < <(start_localtunnel "8000" "API")
-    API_TUNNEL_PID="${api_tunnel_data[0]}"
-    API_TUNNEL_LOG="${api_tunnel_data[1]}"
-    API_TUNNEL_URL="${api_tunnel_data[2]}"
+    # Read API tunnel data
+    api_tunnel_output="$(start_localtunnel "8000" "API")"
+    API_TUNNEL_PID="$(echo "$api_tunnel_output" | sed -n '1p')"
+    API_TUNNEL_LOG="$(echo "$api_tunnel_output" | sed -n '2p')"
+    API_TUNNEL_URL="$(echo "$api_tunnel_output" | sed -n '3p')"
 
-    mapfile -t web_tunnel_data < <(start_localtunnel "8081" "web app")
-    WEB_TUNNEL_PID="${web_tunnel_data[0]}"
-    WEB_TUNNEL_LOG="${web_tunnel_data[1]}"
-    WEB_TUNNEL_URL="${web_tunnel_data[2]}"
+    # Read web tunnel data
+    web_tunnel_output="$(start_localtunnel "8081" "web app")"
+    WEB_TUNNEL_PID="$(echo "$web_tunnel_output" | sed -n '1p')"
+    WEB_TUNNEL_LOG="$(echo "$web_tunnel_output" | sed -n '2p')"
+    WEB_TUNNEL_URL="$(echo "$web_tunnel_output" | sed -n '3p')"
 
     ENCODED_API_TUNNEL_URL="${API_TUNNEL_URL//:/%3A}"
     ENCODED_API_TUNNEL_URL="${ENCODED_API_TUNNEL_URL//\//%2F}"
