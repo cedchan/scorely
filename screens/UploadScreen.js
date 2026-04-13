@@ -1,97 +1,133 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Animated,
   Alert,
   Platform,
+  Pressable,
   SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
-  TouchableOpacity,
+  TextInput,
   useWindowDimensions,
   View,
 } from 'react-native';
 import { useFonts, Afacad_400Regular } from '@expo-google-fonts/afacad';
 import { FontAwesomeIcon } from '@fortawesome/react-native-fontawesome';
-import { faCheckCircle, faClock, faMusic, faUpload, faUserPlus } from '@fortawesome/free-solid-svg-icons';
+import {
+  faBars,
+  faCheckCircle,
+  faClock,
+  faFileMusic,
+  faGrip,
+  faMagnifyingGlass,
+  faMusic,
+  faUpload,
+  faUserPlus,
+} from '@fortawesome/free-solid-svg-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import { getApiBaseUrl } from '../services/apiBaseUrl';
 
 const COLORS = {
   background: '#F7F1E8',
   card: '#FFFDF8',
+  cardSoft: '#FBF7F0',
   stroke: '#E3D5C2',
   muted: '#A9988F',
   primary: '#58392F',
   accent: '#D8DCC8',
   accentSoft: '#F3F4EC',
   success: '#4E8B62',
-  paperShadow: 'rgba(88, 57, 47, 0.08)',
 };
 
 const DEFAULT_PROJECTS = [
   {
     id: 'project-upload',
-    title: 'Upload New Piece',
+    title: 'Upload new piece',
     icon: faUpload,
-    subtitle: null,
-    tone: 'neutral',
+    subtitle: 'Import a PDF and start a new transcription',
     action: 'upload',
+    kind: 'action',
+    updatedAt: 'Start here',
   },
   {
     id: 'project-join',
-    title: 'Join Shared Score',
+    title: 'Join shared score',
     icon: faUserPlus,
-    subtitle: 'Enter a share code',
-    tone: 'neutral',
+    subtitle: 'Open a score with a share code',
     action: 'join',
+    kind: 'action',
+    updatedAt: 'Collaborative',
   },
   {
-    id: 'project-demo-1',
-    title: 'Demo Score 1',
-    subtitle: null,
-    icon: faMusic,
-    tone: 'neutral',
-    action: 'open',
-    jobId: '8f8216e9-6030-41ce-a5c9-a84f1b4734fc',
-    musicxmlPath: '/api/download/8f8216e9-6030-41ce-a5c9-a84f1b4734fc/8f8216e9-6030-41ce-a5c9-a84f1b4734fc.mxl',
-    pageManifestPath: '/api/score-pages/8f8216e9-6030-41ce-a5c9-a84f1b4734fc',
+    id: 'project-empty-1',
+    title: 'Untitled Score',
+    subtitle: 'No pages rendered yet',
+    icon: faFileMusic,
+    action: 'placeholder',
+    kind: 'score',
+    updatedAt: 'Empty',
   },
   {
-    id: 'project-demo-2',
-    title: 'Demo Score 2',
-    subtitle: null,
-    icon: faMusic,
-    tone: 'neutral',
-    action: 'open',
-    jobId: '8f8216e9-6030-41ce-a5c9-a84f1b4734fc',
-    musicxmlPath: '/api/download/8f8216e9-6030-41ce-a5c9-a84f1b4734fc/8f8216e9-6030-41ce-a5c9-a84f1b4734fc.mxl',
-    pageManifestPath: '/api/score-pages/8f8216e9-6030-41ce-a5c9-a84f1b4734fc',
-  },
-  {
-    id: 'project-demo-3',
-    title: 'Demo Score 3',
-    subtitle: null,
-    icon: faMusic,
-    tone: 'neutral',
-    action: 'open',
-    jobId: '8f8216e9-6030-41ce-a5c9-a84f1b4734fc',
-    musicxmlPath: '/api/download/8f8216e9-6030-41ce-a5c9-a84f1b4734fc/8f8216e9-6030-41ce-a5c9-a84f1b4734fc.mxl',
-    pageManifestPath: '/api/score-pages/8f8216e9-6030-41ce-a5c9-a84f1b4734fc',
+    id: 'project-empty-2',
+    title: 'Untitled Score',
+    subtitle: 'No pages rendered yet',
+    icon: faFileMusic,
+    action: 'placeholder',
+    kind: 'score',
+    updatedAt: 'Empty',
   },
 ];
 
+const ScorePreview = () => {
+  return (
+    <View style={styles.sheetPreview}>
+      <View style={styles.sheetPreviewHeader} />
+      <View style={styles.staffGroup}>
+        <View style={styles.staffLine} />
+        <View style={styles.staffLine} />
+        <View style={styles.staffLine} />
+      </View>
+      <View style={styles.staffGroupTight}>
+        <View style={styles.staffLineLight} />
+        <View style={styles.staffLineLight} />
+      </View>
+    </View>
+  );
+};
+
+const ScoreCard = ({ project, width, onPress }) => {
+  return (
+    <Pressable onPress={() => onPress(project)} style={[styles.projectCard, { width }]}>
+      <View style={styles.projectCardTop}>
+        <View style={styles.projectIconWrap}>
+          <FontAwesomeIcon icon={project.icon} size={18} color={COLORS.primary} />
+        </View>
+        <View style={styles.metaBadge}>
+          <Text style={styles.metaBadgeText}>{project.updatedAt}</Text>
+        </View>
+      </View>
+
+      <ScorePreview />
+
+      <Text style={styles.projectTitle}>{project.title}</Text>
+      <Text style={styles.projectSubtitle}>{project.subtitle || 'Open score'}</Text>
+    </Pressable>
+  );
+};
+
 export default function UploadScreen({ navigation }) {
-  const { width, height } = useWindowDimensions();
+  const { width } = useWindowDimensions();
   const apiBaseUrl = getApiBaseUrl();
+
   const [selectedFile, setSelectedFile] = useState(null);
   const [statusText, setStatusText] = useState('Choose a piece to start transcription.');
   const [isLoading, setIsLoading] = useState(false);
   const [jobId, setJobId] = useState(null);
   const [latestProject, setLatestProject] = useState(null);
+  const [viewMode, setViewMode] = useState('grid');
+  const [searchQuery, setSearchQuery] = useState('');
   const pollTimerRef = useRef(null);
-  const scrollX = useRef(new Animated.Value(0)).current;
 
   const [fontsLoaded] = useFonts({
     Afacad_400Regular,
@@ -105,20 +141,21 @@ export default function UploadScreen({ navigation }) {
     };
   }, []);
 
-  // Refresh latest project when screen comes into focus
   useEffect(() => {
     const unsubscribe = navigation.addListener('focus', async () => {
-      // Refresh the latest project's title if it exists
       if (latestProject?.jobId && latestProject?.pageManifestPath) {
         try {
           const response = await fetch(`${apiBaseUrl}${latestProject.pageManifestPath}`);
           const data = await response.json();
 
           if (response.ok && data.title) {
-            setLatestProject((prev) => ({
-              ...prev,
-              title: data.title,
-            }));
+            setLatestProject((prev) => {
+              if (!prev) return prev;
+              return {
+                ...prev,
+                title: data.title,
+              };
+            });
           }
         } catch (error) {
           console.error('Failed to refresh project title:', error);
@@ -163,7 +200,10 @@ export default function UploadScreen({ navigation }) {
           fileName: data.title || 'Shared Score',
         });
       } else {
-        Alert.alert('Invalid Code', data.detail || 'The share code you entered is invalid or expired.');
+        Alert.alert(
+          'Invalid Code',
+          data.detail || 'The share code you entered is invalid or expired.'
+        );
       }
     } catch (error) {
       Alert.alert('Connection Error', `Failed to resolve share code: ${error.message}`);
@@ -205,10 +245,11 @@ export default function UploadScreen({ navigation }) {
       }
 
       const transcriptionDone = job.progress?.transcription === 'completed';
+
       setStatusText(
         transcriptionDone
           ? 'Transcription finished. Preparing readable pages...'
-          : 'Transcribing the uploaded PDF into MusicXML...'
+          : 'Transcribing the uploaded file into readable notation...'
       );
 
       if (job.error || job.status === 'failed') {
@@ -221,10 +262,11 @@ export default function UploadScreen({ navigation }) {
         setLatestProject({
           id: `project-${nextJobId}`,
           title: fileName,
-          subtitle: null,
-          icon: faMusic,
-          tone: 'neutral',
+          subtitle: 'Ready to open',
+          icon: faFileMusic,
           action: 'open',
+          kind: 'score',
+          updatedAt: 'Just now',
           jobId: nextJobId,
           musicxmlPath: job.files.musicxml,
           pageManifestPath: job.files.score_pages,
@@ -245,9 +287,11 @@ export default function UploadScreen({ navigation }) {
   };
 
   const uploadPdf = async (fileAsset) => {
+    const isMusicXML =
+      fileAsset.name?.toLowerCase().endsWith('.mxl') ||
+      fileAsset.name?.toLowerCase().endsWith('.musicxml');
+
     const formData = new FormData();
-    const isMusicXML = fileAsset.name?.toLowerCase().endsWith('.mxl') ||
-                       fileAsset.name?.toLowerCase().endsWith('.musicxml');
 
     if (Platform.OS === 'web' && fileAsset.file) {
       formData.append('file', fileAsset.file, fileAsset.name || 'score.pdf');
@@ -255,12 +299,18 @@ export default function UploadScreen({ navigation }) {
       formData.append('file', {
         uri: fileAsset.uri,
         name: fileAsset.name || 'score.pdf',
-        type: fileAsset.mimeType || (isMusicXML ? 'application/vnd.recordare.musicxml+xml' : 'application/pdf'),
+        type:
+          fileAsset.mimeType ||
+          (isMusicXML
+            ? 'application/vnd.recordare.musicxml+xml'
+            : 'application/pdf'),
       });
     }
 
     setIsLoading(true);
-    setStatusText(isMusicXML ? 'Uploading MusicXML to the backend...' : 'Uploading PDF to the backend...');
+    setStatusText(
+      isMusicXML ? 'Uploading MusicXML to the backend...' : 'Uploading PDF to the backend...'
+    );
 
     try {
       const response = await fetch(`${apiBaseUrl}/api/transcribe`, {
@@ -274,7 +324,9 @@ export default function UploadScreen({ navigation }) {
       }
 
       setJobId(data.job_id);
-      setStatusText(isMusicXML ? 'Processing MusicXML file...' : 'Upload complete. Waiting for transcription...');
+      setStatusText(
+        isMusicXML ? 'Processing MusicXML file...' : 'Upload complete. Waiting for transcription...'
+      );
       pollJobStatus(data.job_id, fileAsset.name || 'Uploaded score');
     } catch (error) {
       setIsLoading(false);
@@ -291,9 +343,10 @@ export default function UploadScreen({ navigation }) {
       const result = await DocumentPicker.getDocumentAsync({
         base64: false,
         copyToCacheDirectory: true,
-        type: Platform.OS === 'web'
-          ? ['application/pdf', '.mxl', '.musicxml']  // Web accepts extensions
-          : '*/*',  // Native lets us filter afterward
+        type:
+          Platform.OS === 'web'
+            ? ['application/pdf', '.mxl', '.musicxml']
+            : '*/*',
       });
 
       if (result.canceled) {
@@ -302,9 +355,8 @@ export default function UploadScreen({ navigation }) {
 
       const fileAsset = result.assets[0];
 
-      // Validate file type
       const validExtensions = ['.pdf', '.mxl', '.musicxml'];
-      const hasValidExtension = validExtensions.some(ext =>
+      const hasValidExtension = validExtensions.some((ext) =>
         fileAsset.name?.toLowerCase().endsWith(ext)
       );
 
@@ -326,17 +378,34 @@ export default function UploadScreen({ navigation }) {
       return DEFAULT_PROJECTS;
     }
 
-    return [DEFAULT_PROJECTS[0], DEFAULT_PROJECTS[1], latestProject, DEFAULT_PROJECTS[2], DEFAULT_PROJECTS[3]];
+    return [
+      DEFAULT_PROJECTS[0],
+      latestProject,
+      DEFAULT_PROJECTS[1],
+      DEFAULT_PROJECTS[2],
+      DEFAULT_PROJECTS[3],
+    ];
   }, [latestProject]);
-  const pagePadding = width >= 768 ? 24 : 20;
-  const projectGap = width >= 768 ? 18 : 14;
-  const projectAspectRatio = 8.5 / 11;
-  const projectCardWidth = width >= 1024 ? 250 : width >= 768 ? 220 : 170;
-  const projectCardHeight = projectCardWidth / projectAspectRatio;
-  const maxScale = 1.08;
-  const snapInterval = projectCardWidth * maxScale + projectGap;
-  const carouselSidePadding = Math.max(0, (width - projectCardWidth * maxScale) / 2);
-  const carouselHeight = projectCardHeight + 40;
+
+  const libraryProjectsBase = useMemo(() => {
+    return projects.filter((project) => project.action !== 'upload' && project.action !== 'join');
+  }, [projects]);
+
+  const filteredProjects = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return libraryProjectsBase;
+
+    return libraryProjectsBase.filter((project) => {
+      return `${project.title} ${project.subtitle || ''} ${project.updatedAt || ''}`
+        .toLowerCase()
+        .includes(query);
+    });
+  }, [libraryProjectsBase, searchQuery]);
+
+  const isTablet = width >= 768;
+  const isWideTablet = width >= 980;
+  const pagePadding = isWideTablet ? 30 : isTablet ? 24 : 18;
+  const cardWidth = isTablet ? '48.6%' : '100%';
 
   if (!fontsLoaded) {
     return null;
@@ -345,119 +414,200 @@ export default function UploadScreen({ navigation }) {
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView
-        contentContainerStyle={[styles.content, { paddingHorizontal: pagePadding, paddingVertical: pagePadding }]}
+        contentContainerStyle={[
+          styles.content,
+          { paddingHorizontal: pagePadding, paddingVertical: pagePadding },
+        ]}
         showsVerticalScrollIndicator={false}
       >
-        <View style={styles.hero}>
-          <Text style={styles.brand}>Scorely</Text>
-          <Text style={styles.heroTitle}>Your rehearsal library, ready to open and play.</Text>
-          <Text style={styles.heroSubtitle}>
-            Upload a PDF, transcribe it into MusicXML, and open a clean paginated score from any
-            device on your local setup.
-          </Text>
-        </View>
-
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Library</Text>
-          <Text style={styles.sectionCopy}>
-            Tap a paper tile to open a score or start a new transcription.
-          </Text>
-        </View>
-
-        <View style={[styles.carouselSection, { minHeight: carouselHeight + 36 }]}>
-          <Animated.ScrollView
-            horizontal
-            decelerationRate="fast"
-            snapToInterval={snapInterval}
-            disableIntervalMomentum
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={[
-              styles.projectCarousel,
-              {
-                paddingLeft: carouselSidePadding,
-                paddingRight: Math.max(0, carouselSidePadding - projectGap),
-              },
-            ]}
-            onScroll={Animated.event(
-              [{ nativeEvent: { contentOffset: { x: scrollX } } }],
-              { useNativeDriver: true }
-            )}
-            scrollEventThrottle={16}
-          >
-            {projects.map((project, index) => {
-              const inputRange = [
-                (index - 1) * snapInterval,
-                index * snapInterval,
-                (index + 1) * snapInterval,
-              ];
-              const scale = scrollX.interpolate({
-                inputRange,
-                outputRange: [0.8, 1.08, 0.8],
-                extrapolate: 'clamp',
-              });
-              const translateY = scrollX.interpolate({
-                inputRange,
-                outputRange: [18, 0, 18],
-                extrapolate: 'clamp',
-              });
-              const opacity = scrollX.interpolate({
-                inputRange,
-                outputRange: [0.62, 1, 0.62],
-                extrapolate: 'clamp',
-              });
-
-            return (
-              <Animated.View
-                key={project.id}
-                style={[
-                  styles.projectCardWrap,
-                  {
-                    width: projectCardWidth,
-                    height: carouselHeight,
-                    marginRight: projectGap,
-                    transform: [{ translateY }, { scale }],
-                    opacity,
-                  },
-                ]}
-              >
-                <TouchableOpacity
-                  style={[styles.projectCard, { width: projectCardWidth, height: projectCardHeight }]}
-                  onPress={() => openProject(project)}
-                  activeOpacity={0.9}
-                >
-                  <View style={styles.projectIconWrap}>
-                    <FontAwesomeIcon
-                      icon={project.icon}
-                      size={22}
-                      color={COLORS.primary}
-                    />
-                  </View>
-                  <Text style={styles.projectTitle}>{project.title}</Text>
-                  {project.subtitle ? <Text style={styles.projectSubtitle}>{project.subtitle}</Text> : null}
-                </TouchableOpacity>
-              </Animated.View>
-            );
-            })}
-          </Animated.ScrollView>
-        </View>
-
-        <View style={styles.statusCard}>
-          <View style={styles.statusHeader}>
-            <View style={styles.statusRow}>
-              <FontAwesomeIcon
-                icon={selectedFile ? faCheckCircle : faClock}
-                size={18}
-                color={COLORS.primary}
-              />
-              <Text style={styles.statusLabel}>
-                {selectedFile ? `Selected file: ${selectedFile.name}` : 'Supported formats: PDF, MXL'}
+        <View style={styles.pageShell}>
+          <View style={styles.topColumn}>
+            <View style={styles.heroBlock}>
+              <Text style={styles.brand}>Scorely</Text>
+              <Text style={styles.heroTitle}>
+                Your rehearsal library, ready to open and play.
+              </Text>
+              <Text style={styles.heroSubtitle}>
+                Upload a PDF, transcribe it into MusicXML, and open a clean paginated score from any
+                device on your local setup.
               </Text>
             </View>
-            {isLoading ? <ActivityIndicator color={COLORS.primary} /> : null}
+
+            <View style={styles.quickActionsCard}>
+              <Text style={styles.quickActionsEyebrow}>Quick actions</Text>
+
+              <Pressable style={styles.primaryAction} onPress={pickDocument}>
+                <View style={styles.primaryActionIcon}>
+                  <FontAwesomeIcon icon={faUpload} size={18} color={COLORS.card} />
+                </View>
+                <View style={styles.primaryActionTextWrap}>
+                  <Text style={styles.primaryActionTitle}>Upload a PDF</Text>
+                  <Text style={styles.primaryActionSubtitle}>Start a new transcription</Text>
+                </View>
+              </Pressable>
+
+              <Pressable style={styles.secondaryAction} onPress={joinSharedScore}>
+                <FontAwesomeIcon icon={faUserPlus} size={15} color={COLORS.primary} />
+                <Text style={styles.secondaryActionText}>Join with share code</Text>
+              </Pressable>
+            </View>
           </View>
 
-          <Text style={styles.statusText}>{statusText}</Text>
-          {jobId ? <Text style={styles.jobText}>Job ID: {jobId}</Text> : null}
+          <View style={styles.toolbarCard}>
+            <View style={[styles.toolbarRow, !isTablet && styles.toolbarRowStack]}>
+              <View style={styles.libraryTitleWrap}>
+                <Text style={styles.sectionTitle}>Library</Text>
+                <Text style={styles.sectionCopy}>
+                  Browse recent scores and reopen previous transcriptions.
+                </Text>
+              </View>
+
+              <View style={[styles.controlsWrap, !isTablet && styles.controlsWrapStack]}>
+                <View style={styles.searchWrap}>
+                  <FontAwesomeIcon icon={faMagnifyingGlass} size={14} color={COLORS.muted} />
+                  <TextInput
+                    value={searchQuery}
+                    onChangeText={setSearchQuery}
+                    placeholder="Search library"
+                    placeholderTextColor={COLORS.muted}
+                    style={styles.searchInput}
+                  />
+                </View>
+
+                <View style={styles.viewToggle}>
+                  <Pressable
+                    onPress={() => setViewMode('grid')}
+                    style={[styles.viewButton, viewMode === 'grid' && styles.viewButtonActive]}
+                  >
+                    <FontAwesomeIcon
+                      icon={faGrip}
+                      size={14}
+                      color={viewMode === 'grid' ? COLORS.card : COLORS.primary}
+                    />
+                    <Text
+                      style={[
+                        styles.viewButtonText,
+                        viewMode === 'grid' && styles.viewButtonTextActive,
+                      ]}
+                    >
+                      Grid
+                    </Text>
+                  </Pressable>
+
+                  <Pressable
+                    onPress={() => setViewMode('list')}
+                    style={[styles.viewButton, viewMode === 'list' && styles.viewButtonActive]}
+                  >
+                    <FontAwesomeIcon
+                      icon={faBars}
+                      size={14}
+                      color={viewMode === 'list' ? COLORS.card : COLORS.primary}
+                    />
+                    <Text
+                      style={[
+                        styles.viewButtonText,
+                        viewMode === 'list' && styles.viewButtonTextActive,
+                      ]}
+                    >
+                      List
+                    </Text>
+                  </Pressable>
+                </View>
+              </View>
+            </View>
+          </View>
+
+          <View style={styles.mainGrid}>
+            <View style={styles.libraryColumn}>
+              <View style={styles.subsection}>
+                <Text style={styles.subsectionTitle}>Recent scores</Text>
+
+                {viewMode === 'grid' ? (
+                  <View style={styles.gridList}>
+                    {filteredProjects.map((project) => (
+                      <ScoreCard
+                        key={project.id}
+                        project={project}
+                        width={cardWidth}
+                        onPress={openProject}
+                      />
+                    ))}
+                  </View>
+                ) : (
+                  <View style={styles.listWrap}>
+                    {filteredProjects.map((project, index) => (
+                      <Pressable
+                        key={project.id}
+                        onPress={() => openProject(project)}
+                        style={[
+                          styles.listRow,
+                          index === filteredProjects.length - 1 && styles.listRowLast,
+                        ]}
+                      >
+                        <View style={styles.listRowLeft}>
+                          <View style={styles.projectIconWrapSmall}>
+                            <FontAwesomeIcon
+                              icon={project.icon}
+                              size={16}
+                              color={COLORS.primary}
+                            />
+                          </View>
+                          <View style={styles.listCopyWrap}>
+                            <Text style={styles.listTitle}>{project.title}</Text>
+                            <Text style={styles.listSubtitle}>
+                              {project.subtitle || 'Open score'}
+                            </Text>
+                          </View>
+                        </View>
+
+                        <View style={styles.listMeta}>
+                          <Text style={styles.listMetaText}>{project.updatedAt}</Text>
+                        </View>
+                      </Pressable>
+                    ))}
+                  </View>
+                )}
+              </View>
+            </View>
+
+            <View style={styles.sidebarColumn}>
+              <View style={styles.statusCard}>
+                <View style={styles.statusHeader}>
+                  <View style={styles.statusHeaderLeft}>
+                    <View style={styles.statusIconBubble}>
+                      <FontAwesomeIcon
+                        icon={selectedFile ? faCheckCircle : faClock}
+                        size={16}
+                        color={selectedFile ? COLORS.success : COLORS.primary}
+                      />
+                    </View>
+                    <View style={styles.statusCopyWrap}>
+                      <Text style={styles.statusTitle}>Transcription status</Text>
+                      <Text style={styles.statusLabel} numberOfLines={1}>
+                        {selectedFile ? selectedFile.name : 'No file selected'}
+                      </Text>
+                    </View>
+                  </View>
+                  {isLoading ? <ActivityIndicator color={COLORS.primary} /> : null}
+                </View>
+
+                <Text style={styles.statusText}>{statusText}</Text>
+                {jobId ? <Text style={styles.jobText}>Job ID: {jobId}</Text> : null}
+              </View>
+
+              <View style={styles.infoCard}>
+                <Text style={styles.infoCardTitle}>Accepted input</Text>
+                <View style={styles.infoChip}>
+                  <FontAwesomeIcon icon={faMusic} size={12} color={COLORS.primary} />
+                  <Text style={styles.infoChipText}>PDF scores only</Text>
+                </View>
+                <Text style={styles.infoCardBody}>
+                  After upload, the app transcribes your score into MusicXML and builds clean
+                  paginated pages for playback.
+                </Text>
+              </View>
+            </View>
+          </View>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -469,76 +619,321 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: COLORS.background,
   },
+
   content: {
+    alignItems: 'center',
+  },
+
+  pageShell: {
+    width: '100%',
+    maxWidth: 1040,
+    alignSelf: 'center',
+  },
+
+  topColumn: {
+    flexDirection: 'column',
+    gap: 14,
+    marginBottom: 20,
+    alignItems: 'center',
+  },
+
+  heroBlock: {
+    width: '100%',
+    maxWidth: 860,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+
+  quickActionsCard: {
+    width: '100%',
+    maxWidth: 940,
+    backgroundColor: COLORS.card,
+    borderRadius: 28,
+    borderWidth: 1,
+    borderColor: COLORS.stroke,
+    padding: 20,
+    shadowColor: COLORS.primary,
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 3,
+    alignSelf: 'center',
+  },
+
+  quickActionsEyebrow: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 16,
+    color: COLORS.muted,
+    marginBottom: 14,
+    textAlign: 'center',
+  },
+
+  primaryAction: {
+    backgroundColor: COLORS.primary,
+    borderRadius: 22,
     paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 20,
+    paddingVertical: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
   },
-  hero: {
-    marginBottom: 28,
+
+  primaryActionIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,253,248,0.16)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
   },
+
+  primaryActionTextWrap: {
+    flex: 1,
+  },
+
+  primaryActionTitle: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 19,
+    color: COLORS.card,
+  },
+
+  primaryActionSubtitle: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 15,
+    color: '#EDE1D6',
+    marginTop: 2,
+  },
+
+  secondaryAction: {
+    borderWidth: 1,
+    borderColor: COLORS.stroke,
+    backgroundColor: COLORS.accentSoft,
+    borderRadius: 20,
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+
+  secondaryActionText: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 18,
+    color: COLORS.primary,
+  },
+
   brand: {
     fontFamily: 'Afacad_400Regular',
-    fontSize: 40,
+    fontSize: 44,
     color: COLORS.primary,
     marginBottom: 10,
+    textAlign: 'center',
   },
+
   heroTitle: {
     fontFamily: 'Afacad_400Regular',
-    fontSize: 28,
-    lineHeight: 32,
+    fontSize: 32,
+    lineHeight: 36,
     color: COLORS.primary,
     marginBottom: 10,
-    maxWidth: 720,
+    maxWidth: 760,
+    textAlign: 'center',
   },
+
   heroSubtitle: {
     fontFamily: 'Afacad_400Regular',
     fontSize: 18,
-    lineHeight: 24,
+    lineHeight: 25,
     color: COLORS.muted,
     maxWidth: 760,
+    textAlign: 'center',
   },
-  sectionHeader: {
-    marginBottom: 16,
+
+  toolbarCard: {
+    width: '100%',
+    maxWidth: 940,
+    alignSelf: 'center',
+    backgroundColor: COLORS.card,
+    borderRadius: 28,
+    borderWidth: 1,
+    borderColor: COLORS.stroke,
+    padding: 20,
+    marginBottom: 18,
   },
+
+  toolbarRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 16,
+  },
+
+  toolbarRowStack: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
+  },
+
+  libraryTitleWrap: {
+    flex: 1,
+  },
+
   sectionTitle: {
     fontFamily: 'Afacad_400Regular',
-    fontSize: 24,
+    fontSize: 28,
     color: COLORS.primary,
     marginBottom: 4,
   },
+
   sectionCopy: {
     fontFamily: 'Afacad_400Regular',
     fontSize: 17,
     color: COLORS.muted,
   },
-  carouselSection: {
-    justifyContent: 'center',
-    marginBottom: 12,
-  },
-  projectCarousel: {
+
+  controlsWrap: {
+    flexDirection: 'row',
     alignItems: 'center',
-    paddingTop: 10,
-    paddingBottom: 16,
+    gap: 12,
   },
-  projectCardWrap: {
-    justifyContent: 'center',
+
+  controlsWrapStack: {
+    width: '100%',
+    flexDirection: 'column',
+    alignItems: 'stretch',
   },
-  projectCard: {
-    backgroundColor: COLORS.card,
-    borderRadius: 18,
-    paddingHorizontal: 14,
-    paddingTop: 14,
-    paddingBottom: 16,
+
+  searchWrap: {
+    minWidth: 240,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: COLORS.background,
     borderWidth: 1,
     borderColor: COLORS.stroke,
-    justifyContent: 'flex-start',
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingVertical: Platform.OS === 'web' ? 12 : 10,
+  },
+
+  searchInput: {
+    flex: 1,
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 17,
+    color: COLORS.primary,
+    ...(Platform.OS === 'web' ? { outlineStyle: 'none' } : {}),
+  },
+
+  viewToggle: {
+    flexDirection: 'row',
+    backgroundColor: COLORS.background,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: COLORS.stroke,
+    padding: 4,
+  },
+
+  viewButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 14,
+  },
+
+  viewButtonActive: {
+    backgroundColor: COLORS.primary,
+  },
+
+  viewButtonText: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 16,
+    color: COLORS.primary,
+  },
+
+  viewButtonTextActive: {
+    color: COLORS.card,
+  },
+
+  mainGrid: {
+    width: '100%',
+    maxWidth: 940,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'center',
+    gap: 18,
+    flexWrap: 'wrap',
+  },
+
+  libraryColumn: {
+    flex: 1,
+    minWidth: 320,
+    maxWidth: 600,
+  },
+
+  sidebarColumn: {
+    width: 300,
+    maxWidth: '100%',
+    gap: 14,
+    marginTop: 4,
+  },
+
+  subsection: {
+    marginBottom: 12,
+  },
+
+  subsectionTitle: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 24,
+    color: COLORS.primary,
+    marginBottom: 12,
+  },
+
+  gridList: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 14,
+  },
+
+  projectCard: {
+    backgroundColor: COLORS.card,
+    borderRadius: 24,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: COLORS.stroke,
     shadowColor: COLORS.primary,
-    shadowOpacity: 1,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.08,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 8 },
     elevation: 3,
   },
+
+  projectCardTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+
+  metaBadge: {
+    backgroundColor: COLORS.accentSoft,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: COLORS.stroke,
+  },
+
+  metaBadgeText: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 13,
+    color: COLORS.muted,
+  },
+
   projectIconWrap: {
     width: 42,
     height: 42,
@@ -547,52 +942,230 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+
+  projectIconWrapSmall: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: '#F2E8DA',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  sheetPreview: {
+    backgroundColor: COLORS.cardSoft,
+    borderWidth: 1,
+    borderColor: COLORS.stroke,
+    borderRadius: 18,
+    height: 100,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    marginBottom: 14,
+    justifyContent: 'space-between',
+  },
+
+  sheetPreviewHeader: {
+    width: '44%',
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: COLORS.accent,
+  },
+
+  staffGroup: {
+    gap: 10,
+  },
+
+  staffGroupTight: {
+    gap: 10,
+  },
+
+  staffLine: {
+    width: '100%',
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: '#EDE2D3',
+  },
+
+  staffLineLight: {
+    width: '88%',
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: '#F1E8DC',
+  },
+
   projectTitle: {
     fontFamily: 'Afacad_400Regular',
-    fontSize: 20,
+    fontSize: 21,
     color: COLORS.primary,
-    marginTop: 14,
+    marginBottom: 4,
   },
+
   projectSubtitle: {
     fontFamily: 'Afacad_400Regular',
     fontSize: 15,
     lineHeight: 20,
     color: COLORS.muted,
-    marginTop: 8,
   },
+
+  listWrap: {
+    backgroundColor: COLORS.card,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: COLORS.stroke,
+    overflow: 'hidden',
+  },
+
+  listRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#EFE4D6',
+    gap: 12,
+  },
+
+  listRowLast: {
+    borderBottomWidth: 0,
+  },
+
+  listRowLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    flex: 1,
+  },
+
+  listCopyWrap: {
+    flex: 1,
+  },
+
+  listTitle: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 19,
+    color: COLORS.primary,
+  },
+
+  listSubtitle: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 15,
+    color: COLORS.muted,
+    marginTop: 2,
+  },
+
+  listMeta: {
+    marginLeft: 12,
+  },
+
+  listMetaText: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 14,
+    color: COLORS.muted,
+  },
+
   statusCard: {
     backgroundColor: COLORS.card,
-    borderRadius: 18,
+    borderRadius: 24,
     borderWidth: 1,
     borderColor: COLORS.stroke,
     padding: 18,
   },
+
   statusHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 10,
+    marginBottom: 12,
+    gap: 12,
   },
-  statusRow: {
+
+  statusHeaderLeft: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 12,
+    flex: 1,
   },
+
+  statusCopyWrap: {
+    flex: 1,
+  },
+
+  statusIconBubble: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: COLORS.accentSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  statusTitle: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 18,
+    color: COLORS.primary,
+  },
+
   statusLabel: {
     fontFamily: 'Afacad_400Regular',
-    fontSize: 17,
-    color: COLORS.primary,
-    marginLeft: 10,
+    fontSize: 14,
+    color: COLORS.muted,
+    marginTop: 2,
   },
+
   statusText: {
     fontFamily: 'Afacad_400Regular',
     fontSize: 17,
-    color: COLORS.muted,
+    color: COLORS.primary,
     lineHeight: 22,
   },
+
   jobText: {
     fontFamily: 'Afacad_400Regular',
     fontSize: 14,
     color: COLORS.muted,
     marginTop: 10,
+  },
+
+  infoCard: {
+    backgroundColor: COLORS.accentSoft,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: COLORS.stroke,
+    padding: 18,
+  },
+
+  infoCardTitle: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 18,
+    color: COLORS.primary,
+    marginBottom: 10,
+  },
+
+  infoChip: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: COLORS.card,
+    borderWidth: 1,
+    borderColor: COLORS.stroke,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginBottom: 12,
+  },
+
+  infoChipText: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 14,
+    color: COLORS.primary,
+  },
+
+  infoCardBody: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 16,
+    lineHeight: 22,
+    color: COLORS.muted,
   },
 });
