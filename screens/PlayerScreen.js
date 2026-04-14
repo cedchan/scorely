@@ -28,10 +28,11 @@ import AnnotationLayer from '../components/AnnotationLayer';
 import AnnotationToolbar from '../components/AnnotationToolbar';
 import annotationSyncService from '../services/annotationSync';
 import { getApiBaseUrl } from '../services/apiBaseUrl';
-import { 
-  FilesetResolver, 
-  FaceLandmarker 
+import {
+  FilesetResolver,
+  FaceLandmarker
 } from '@mediapipe/tasks-vision';
+import { config } from '../config';
 
 const COLORS = {
   beige: '#FAF7F0',
@@ -83,6 +84,7 @@ export default function PlayerScreen({ route, navigation }) {
   const lastTurnTimeRef = useRef(0);
   const baselineRelativeYRef = useRef(null);
   const currentPageRef = useRef(0);
+  const [debugInfo, setDebugInfo] = useState('');
   const updateMeasureFromTimeRef = useRef(() => {});
   const jobId = route.params?.jobId;
   const apiBaseUrl = route.params?.apiBaseUrl || getApiBaseUrl();
@@ -527,6 +529,14 @@ export default function PlayerScreen({ route, navigation }) {
       }
 
       setCameraError(null);
+      console.log('startCameraAndTracking called', {
+        platform: Platform.OS,
+        isWeb: Platform.OS === 'web',
+        hasNavigator: typeof navigator !== 'undefined',
+        hasMediaDevices: typeof navigator !== 'undefined' && !!navigator.mediaDevices,
+        hasGetUserMedia: typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia,
+        isSecureContext: typeof window !== 'undefined' ? window.isSecureContext : 'N/A',
+      });
 
       if (!navigator.mediaDevices?.getUserMedia) {
         setCameraError('This browser does not support camera access for nod detection.');
@@ -545,19 +555,34 @@ export default function PlayerScreen({ route, navigation }) {
       console.log('about to request camera');
       try {
         const stream = await requestCameraStream();
+        console.log('camera stream obtained', {
+          streamId: stream.id,
+          tracks: stream.getTracks().length,
+          videoTracks: stream.getVideoTracks().length,
+        });
+        console.log('loading mediapipe vision tasks...');
+        setDebugInfo('Loading AI model...');
         const vision = await FilesetResolver.forVisionTasks(
           `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MEDIAPIPE_VERSION}/wasm`
         );
-  
+        console.log('vision tasks loaded, creating face landmarker...');
+        setDebugInfo('Creating face detector...');
+
         const faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
           baseOptions: {
             modelAssetPath:
               'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task',
+            delegate: 'GPU',
           },
           runningMode: 'VIDEO',
           numFaces: 1,
+          minFaceDetectionConfidence: 0.5,
+          minFacePresenceConfidence: 0.5,
+          minTrackingConfidence: 0.5,
         });
-  
+        console.log('face landmarker created successfully');
+        setDebugInfo('Face detector ready!');
+
         faceLandmarkerRef.current = faceLandmarker;
   
         if (cancelled) {
@@ -569,6 +594,7 @@ export default function PlayerScreen({ route, navigation }) {
         streamRef.current = stream;
   
         if (videoRef.current) {
+          console.log('setting up video element...');
           videoRef.current.muted = true;
           videoRef.current.autoplay = true;
           videoRef.current.playsInline = true;
@@ -577,40 +603,86 @@ export default function PlayerScreen({ route, navigation }) {
           videoRef.current.setAttribute('playsinline', 'true');
           videoRef.current.setAttribute('webkit-playsinline', 'true');
           videoRef.current.srcObject = stream;
+          console.log('calling play on video element...');
           await videoRef.current.play();
+          console.log('waiting for video to be ready...');
           await waitForVideoReady(videoRef.current);
+          console.log('video is ready!', {
+            width: videoRef.current.videoWidth,
+            height: videoRef.current.videoHeight,
+            readyState: videoRef.current.readyState,
+          });
         }
-  
+
         if (cancelled) return;
-  
+
         setCameraEnabled(true);
+        console.log('camera enabled, starting detection loop');
   
+        let frameCount = 0;
         const detectFrame = () => {
-          if (
-            cancelled ||
-            !videoRef.current ||
-            !faceLandmarkerRef.current ||
-            videoRef.current.readyState < 2
-          ) {
+          frameCount++;
+
+          if (cancelled) {
+            console.log('detectFrame: cancelled');
+            return;
+          }
+
+          if (!videoRef.current) {
+            console.log('detectFrame: no videoRef');
             animationFrameRef.current = requestAnimationFrame(detectFrame);
             return;
           }
-  
-          const results = faceLandmarkerRef.current.detectForVideo(
-            videoRef.current,
-            performance.now()
-          );
-  
+
+          if (!faceLandmarkerRef.current) {
+            console.log('detectFrame: no faceLandmarker');
+            animationFrameRef.current = requestAnimationFrame(detectFrame);
+            return;
+          }
+
+          if (videoRef.current.readyState < 2) {
+            if (frameCount % 30 === 0) { // Log every 30 frames
+              console.log('detectFrame: video not ready', videoRef.current.readyState);
+            }
+            animationFrameRef.current = requestAnimationFrame(detectFrame);
+            return;
+          }
+
+          let results;
+          try {
+            results = faceLandmarkerRef.current.detectForVideo(
+              videoRef.current,
+              performance.now()
+            );
+          } catch (err) {
+            console.error('Error in detectForVideo:', err);
+            setDebugInfo(`Error: ${err.message}`);
+            animationFrameRef.current = requestAnimationFrame(detectFrame);
+            return;
+          }
+
+          if (frameCount % 30 === 0) { // Log every 30 frames (~1 second)
+            console.log('detection results:', {
+              hasFaceLandmarks: !!results.faceLandmarks,
+              numFaces: results.faceLandmarks?.length || 0,
+              frameCount,
+            });
+          }
+
           const face = results.faceLandmarks?.[0];
   
           if (face) {
             const nose = face[1];
             const leftEye = face[33];
             const rightEye = face[263];
-          
+
             if (nose && leftEye && rightEye) {
               const eyeY = (leftEye.y + rightEye.y) / 2;
-          
+              const relativeY = nose.y - eyeY;
+              const delta = baselineRelativeYRef.current !== null
+                ? relativeY - baselineRelativeYRef.current
+                : 0;
+
               console.log(
                 'face detected',
                 'noseY:', nose.y,
@@ -618,8 +690,17 @@ export default function PlayerScreen({ route, navigation }) {
                 'rightEyeY:', rightEye.y,
                 'eyeY:', eyeY
               );
-          
+
+              // Update debug overlay
+              setDebugInfo(`✓ Face detected\nPhase: ${nodPhaseRef.current}\nDelta: ${delta.toFixed(4)}\nBaseline: ${baselineRelativeYRef.current?.toFixed(4) || 'null'}`);
+
               handleNodDetection(nose.y, eyeY);
+            } else {
+              setDebugInfo('✓ Face detected (missing landmarks)');
+            }
+          } else {
+            if (frameCount % 15 === 0) { // Update every 15 frames
+              setDebugInfo('✗ No face detected\nCheck lighting & position');
             }
           }
   
@@ -697,17 +778,15 @@ export default function PlayerScreen({ route, navigation }) {
   const handleNodDetection = (noseY, eyeY) => {
     const relativeY = noseY - eyeY;
     const now = Date.now();
-    const downThreshold = 0.01;
-    const upThreshold = 0.004;
-    const cooldownMs = 1200;
-  
+    const { downThreshold, upThreshold, cooldownMs, baselineSmoothing } = config.nodDetection;
+
     if (baselineRelativeYRef.current === null) {
       baselineRelativeYRef.current = relativeY;
       return;
     }
-  
+
     const delta = relativeY - baselineRelativeYRef.current;
-  
+
     console.log(
       'nod check',
       'relativeY:', relativeY,
@@ -716,27 +795,27 @@ export default function PlayerScreen({ route, navigation }) {
       'nodPhase:', nodPhaseRef.current,
       'lastTurnTime:', lastTurnTimeRef.current
     );
-  
+
     if (now - lastTurnTimeRef.current < cooldownMs) {
       return;
     }
-  
+
     if (nodPhaseRef.current === 'idle' && delta > downThreshold) {
       nodPhaseRef.current = 'down';
       return;
     }
-  
+
     if (nodPhaseRef.current === 'down' && delta < upThreshold) {
       nodPhaseRef.current = 'idle';
       lastTurnTimeRef.current = now;
-  
+
       if (currentPageRef.current < pages.length - 1) {
         goToPage(currentPageRef.current + 1);
       }
     }
-  
+
     baselineRelativeYRef.current =
-      baselineRelativeYRef.current * 0.9 + relativeY * 0.1;
+      baselineRelativeYRef.current * baselineSmoothing + relativeY * (1 - baselineSmoothing);
   };
   const onMomentumScrollEnd = (event) => {
     const nextPage = Math.round(event.nativeEvent.contentOffset.x / width);
@@ -1059,7 +1138,7 @@ export default function PlayerScreen({ route, navigation }) {
           autoPlay
           playsInline
           muted
-          style={styles.hiddenCameraVideo}
+          style={config.nodDetection.showCameraPreview && nodEnabled && cameraEnabled ? styles.cameraPreview : styles.hiddenCameraVideo}
         />
       ) : null}
 
@@ -1165,11 +1244,16 @@ export default function PlayerScreen({ route, navigation }) {
         </View>
       </View>
 
-      {(cameraError || (nodEnabled && !cameraEnabled)) ? (
+      {(cameraError || (nodEnabled && !cameraEnabled) || (nodEnabled && config.nodDetection.showDebug && debugInfo)) ? (
         <View style={styles.cameraStatusRow}>
           <Text style={styles.cameraStatusText}>
-            {cameraError || 'Starting front camera for nod detection...'}
+            {cameraError || (nodEnabled && !cameraEnabled ? 'Starting front camera for nod detection...' : '')}
           </Text>
+          {nodEnabled && cameraEnabled && config.nodDetection.showDebug && debugInfo ? (
+            <Text style={[styles.cameraStatusText, { fontFamily: 'Courier', fontSize: 12, marginTop: 4 }]}>
+              {debugInfo}
+            </Text>
+          ) : null}
         </View>
       ) : null}
 
@@ -1508,6 +1592,18 @@ const styles = StyleSheet.create({
     opacity: 0,
     pointerEvents: 'none',
   },
+  cameraPreview: {
+    position: 'absolute',
+    bottom: 20,
+    right: 20,
+    width: 160,
+    height: 120,
+    borderRadius: 12,
+    border: '3px solid #58392F',
+    zIndex: 1000,
+    transform: 'scaleX(-1)', // Mirror the video
+    boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+  },
   pageList: {
     flex: 1,
   },
@@ -1663,7 +1759,29 @@ const styles = StyleSheet.create({
   },
   
   gestureButtonTextActive: {
-    color: COLORS.beige,  
+    color: COLORS.beige,
+  },
+  debugButton: {
+    marginLeft: 8,
+    backgroundColor: COLORS.beige,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+
+  debugButtonActive: {
+    backgroundColor: '#FFD60A',
+  },
+
+  debugButtonText: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 14,
+    color: COLORS.darkBrown,
+  },
+
+  debugButtonTextActive: {
+    color: '#58392F',
+    fontWeight: 'bold',
   },
   testButton: {
     marginLeft: 10,
@@ -1672,14 +1790,14 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 8,
   },
-  
+
   testButtonText: {
     fontFamily: 'Afacad_400Regular',
     fontSize: 14,
     color: '#58392F',
   },
   rightButtons: {
-    flexDirection: 'row',  
+    flexDirection: 'row',
     alignItems: 'center',
   },
 });
