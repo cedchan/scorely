@@ -12,6 +12,7 @@ import {
   View,
 } from 'react-native';
 import { useFonts, Afacad_400Regular } from '@expo-google-fonts/afacad';
+import { SvgUri, SvgXml } from 'react-native-svg';
 import { FontAwesomeIcon } from '@fortawesome/react-native-fontawesome';
 import {
   faArrowLeft,
@@ -39,12 +40,15 @@ const COLORS = {
 };
 
 const MEDIAPIPE_VERSION = '0.10.34';
+// Small perceptual lead so the visual highlight lands with the heard note onset.
+const PLAYBACK_HIGHLIGHT_LEAD_SECONDS = 0.18;
 
 export default function PlayerScreen({ route, navigation }) {
   const { width, height } = useWindowDimensions();
   const scrollViewRef = useRef(null);
   const webAudioRef = useRef(null);
   const audioPollTimerRef = useRef(null);
+  const playbackAnimationFrameRef = useRef(null);
   const [pages, setPages] = useState([]);
   const [title, setTitle] = useState(route.params?.fileName || 'Digital Score');
   const [currentPage, setCurrentPage] = useState(0);
@@ -79,6 +83,7 @@ export default function PlayerScreen({ route, navigation }) {
   const lastTurnTimeRef = useRef(0);
   const baselineRelativeYRef = useRef(null);
   const currentPageRef = useRef(0);
+  const updateMeasureFromTimeRef = useRef(() => {});
   const jobId = route.params?.jobId;
   const apiBaseUrl = route.params?.apiBaseUrl || getApiBaseUrl();
   const pageManifestPath = route.params?.pageManifestPath || (jobId ? `/api/score-pages/${jobId}` : null);
@@ -136,6 +141,18 @@ export default function PlayerScreen({ route, navigation }) {
     });
   }, [alignmentMappings, measureRegionLookup, pages]);
 
+  const measureTimeLookup = useMemo(() => {
+    const lookup = new Map();
+    alignmentMappings.forEach((mapping, index) => {
+      const parsedIndex = Number(mapping.measure_index);
+      const measureIndex = Number.isFinite(parsedIndex) ? parsedIndex : index;
+      if (!lookup.has(measureIndex)) {
+        lookup.set(measureIndex, Number(mapping.time_seconds) || 0);
+      }
+    });
+    return lookup;
+  }, [alignmentMappings]);
+
   let [fontsLoaded] = useFonts({
     Afacad_400Regular,
   });
@@ -162,6 +179,31 @@ export default function PlayerScreen({ route, navigation }) {
     });
   };
 
+  const injectHighlightIntoSvg = (svgXml, region) => {
+    if (!svgXml || !region) {
+      return svgXml;
+    }
+
+    const rectX = region.x * 21000;
+    const rectY = region.y * 29700;
+    const rectWidth = region.width * 21000;
+    const rectHeight = region.height * 29700;
+    const highlightRect = [
+      `<rect x="${rectX}" y="${rectY}" width="${rectWidth}" height="${rectHeight}"`,
+      ' fill="#FFD60A"',
+      ' fill-opacity="0.18"',
+      ' stroke="#C49400"',
+      ' stroke-opacity="0.45"',
+      ' stroke-width="48"',
+      ' />',
+    ].join('');
+
+    return svgXml.replace(
+      /(<svg[^>]*class="definition-scale"[^>]*>)([\s\S]*?)(<\/svg>)/,
+      `$1$2${highlightRect}$3`
+    );
+  };
+
   useEffect(() => {
     const loadRenderedPages = async () => {
       setIsLoading(true);
@@ -185,12 +227,32 @@ export default function PlayerScreen({ route, navigation }) {
 
         setTitle(data.title || route.params?.fileName || 'Digital Score');
         const normalizedPages = normalizePageMeasureRegions(data.pages || []);
-        setPages(
-          normalizedPages.map((page) => ({
-            ...page,
-            uri: `${apiBaseUrl}${page.image_path}?job=${encodeURIComponent(cacheToken)}&page=${page.page_number}`,
-          }))
+        const hydratedPages = await Promise.all(
+          normalizedPages.map(async (page) => {
+            const pageUri = `${apiBaseUrl}${page.image_path}?job=${encodeURIComponent(cacheToken)}&page=${page.page_number}`;
+            const isSvgPage = String(page.image_path || '').toLowerCase().includes('.svg');
+            let svgXml = null;
+
+            if (isSvgPage) {
+              try {
+                const svgResponse = await fetch(pageUri);
+                if (svgResponse.ok) {
+                  svgXml = await svgResponse.text();
+                }
+              } catch (svgLoadError) {
+                svgXml = null;
+              }
+            }
+
+            return {
+              ...page,
+              uri: pageUri,
+              svgXml,
+            };
+          })
         );
+
+        setPages(hydratedPages);
       } catch (loadError) {
         setError(loadError.message);
       } finally {
@@ -275,6 +337,7 @@ export default function PlayerScreen({ route, navigation }) {
   }, [apiBaseUrl, jobId]);
 
   useEffect(() => {
+    stopPlaybackHighlightSync();
     setIsPlaying(false);
     setActiveMeasure(null);
     setActiveMeasureIndex(null);
@@ -695,9 +758,14 @@ export default function PlayerScreen({ route, navigation }) {
       return;
     }
 
+    const effectiveTimeSeconds = Math.max(
+      0,
+      timeSeconds + PLAYBACK_HIGHLIGHT_LEAD_SECONDS
+    );
+
     let nextIndex = 0;
     for (let index = 0; index < alignmentMappings.length; index += 1) {
-      if (alignmentMappings[index].time_seconds <= timeSeconds) {
+      if (alignmentMappings[index].time_seconds <= effectiveTimeSeconds) {
         nextIndex = index;
       } else {
         break;
@@ -724,6 +792,87 @@ export default function PlayerScreen({ route, navigation }) {
       goToPage(nextPageIndex);
     }
   };
+
+  updateMeasureFromTimeRef.current = updateMeasureFromTime;
+
+  const stopPlaybackHighlightSync = () => {
+    if (playbackAnimationFrameRef.current) {
+      cancelAnimationFrame(playbackAnimationFrameRef.current);
+      playbackAnimationFrameRef.current = null;
+    }
+  };
+
+  const startPlaybackHighlightSync = () => {
+    stopPlaybackHighlightSync();
+
+    const syncPlaybackHighlight = () => {
+      const audioElement = webAudioRef.current;
+      if (!audioElement) {
+        playbackAnimationFrameRef.current = null;
+        return;
+      }
+
+      updateMeasureFromTimeRef.current(audioElement.currentTime);
+
+      if (!audioElement.paused && !audioElement.ended) {
+        playbackAnimationFrameRef.current = requestAnimationFrame(syncPlaybackHighlight);
+      } else {
+        playbackAnimationFrameRef.current = null;
+      }
+    };
+
+    syncPlaybackHighlight();
+  };
+
+  const seekToMeasureRegion = (region, pageIndex) => {
+    if (!region) {
+      return;
+    }
+
+    const regionMeasureIndex = Number(region.measure_index);
+    const regionMeasure = Number(region.measure);
+    const nextMeasureIndex = Number.isFinite(regionMeasureIndex) ? regionMeasureIndex : null;
+    const nextMeasure = Number.isFinite(regionMeasure) ? regionMeasure : null;
+
+    if (typeof pageIndex === 'number' && pageIndex !== currentPageRef.current) {
+      goToPage(pageIndex);
+    }
+
+    setActiveMeasure(nextMeasure);
+    setActiveMeasureIndex(nextMeasureIndex);
+
+    if (Platform.OS !== 'web') {
+      return;
+    }
+
+    const audioElement = webAudioRef.current;
+    if (!audioElement || nextMeasureIndex === null) {
+      return;
+    }
+
+    const targetTime = measureTimeLookup.get(nextMeasureIndex);
+    if (!Number.isFinite(targetTime)) {
+      return;
+    }
+
+    try {
+      audioElement.currentTime = Math.max(0, targetTime);
+    } catch (seekError) {
+      return;
+    }
+
+    updateMeasureFromTime(targetTime - PLAYBACK_HIGHLIGHT_LEAD_SECONDS);
+
+    if (!audioElement.paused && !audioElement.ended) {
+      startPlaybackHighlightSync();
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      stopPlaybackHighlightSync();
+    };
+  }, []);
 
   const togglePlayback = async () => {
     if (!playbackUrl) {
@@ -921,13 +1070,26 @@ export default function PlayerScreen({ route, navigation }) {
           key={playbackUrl}
           preload="metadata"
           src={playbackUrl}
-          onPlay={() => setIsPlaying(true)}
-          onPause={() => setIsPlaying(false)}
-          onEnded={() => setIsPlaying(false)}
+          onPlay={() => {
+            setIsPlaying(true);
+            startPlaybackHighlightSync();
+          }}
+          onPause={() => {
+            setIsPlaying(false);
+            stopPlaybackHighlightSync();
+          }}
+          onEnded={() => {
+            setIsPlaying(false);
+            stopPlaybackHighlightSync();
+          }}
+          onSeeked={(event) => {
+            updateMeasureFromTime(event.currentTarget.currentTime);
+          }}
           onTimeUpdate={(event) => updateMeasureFromTime(event.currentTarget.currentTime)}
           onError={() => {
             setAudioError('Unable to load the generated audio file.');
             setIsPlaying(false);
+            stopPlaybackHighlightSync();
           }}
           style={{ display: 'none' }}
         />
@@ -1027,6 +1189,7 @@ export default function PlayerScreen({ route, navigation }) {
           // Use full available space now that labels are removed
           const containerWidth = width - pageHorizontalPadding * 2;
           const containerHeight = availablePageHeight;
+          const isSvgPage = String(item.image_path || item.uri || '').toLowerCase().includes('.svg');
 
           const imageWidth = item.width || 1240;
           const imageHeight = item.height || 1754;
@@ -1082,7 +1245,7 @@ export default function PlayerScreen({ route, navigation }) {
                   const bandTopPercent =
                     range && isActiveRange ? (activeIndexWithinPage / measuresOnPage) * 100 : 0;
                   const bandHeightPercent = Math.max(12, 100 / measuresOnPage);
-                  const overlayInset = 8;
+                  const overlayInset = 2;
                   const regionLeft = activeMeasureRegion
                     ? imageOffsetX + activeMeasureRegion.x * displayedWidth
                     : 0;
@@ -1111,19 +1274,35 @@ export default function PlayerScreen({ route, navigation }) {
                   return (
                     <>
                       <View style={styles.imageContainer}>
-                        <Image
-                          source={{ uri: item.uri }}
-                          style={[
-                            styles.pageImage,
-                            {
-                              width: displayedWidth,
-                              height: displayedHeight,
-                            },
-                          ]}
-                          resizeMode="contain"
-                        />
+                        {isSvgPage && item.svgXml ? (
+                          <SvgXml
+                            xml={injectHighlightIntoSvg(item.svgXml, activeMeasureRegion)}
+                            width={displayedWidth}
+                            height={displayedHeight}
+                            style={styles.pageSvg}
+                          />
+                        ) : isSvgPage ? (
+                          <SvgUri
+                            uri={item.uri}
+                            width={displayedWidth}
+                            height={displayedHeight}
+                            style={styles.pageSvg}
+                          />
+                        ) : (
+                          <Image
+                            source={{ uri: item.uri }}
+                            style={[
+                              styles.pageImage,
+                              {
+                                width: displayedWidth,
+                                height: displayedHeight,
+                              },
+                            ]}
+                            resizeMode="contain"
+                          />
+                        )}
 
-                        {activeMeasureRegion ? (
+                        {!isSvgPage && activeMeasureRegion ? (
                           <View
                             pointerEvents="none"
                             style={[
@@ -1151,6 +1330,38 @@ export default function PlayerScreen({ route, navigation }) {
                               },
                             ]}
                           />
+                        ) : null}
+
+                        {!annotationsEnabled ? (
+                          <View pointerEvents="box-none" style={styles.measureHitAreaLayer}>
+                            {(item.measure_regions || []).map((region, regionIndex) => {
+                              const hitLeft = imageOffsetX + region.x * displayedWidth;
+                              const hitTop = imageOffsetY + region.y * displayedHeight;
+                              const hitWidth = region.width * displayedWidth;
+                              const hitHeight = region.height * displayedHeight;
+
+                              if (hitWidth <= 0 || hitHeight <= 0) {
+                                return null;
+                              }
+
+                              return (
+                                <TouchableOpacity
+                                  key={`${item.page_number}-${region.measure_index ?? regionIndex}`}
+                                  activeOpacity={1}
+                                  style={[
+                                    styles.measureHitArea,
+                                    {
+                                      left: hitLeft,
+                                      top: hitTop,
+                                      width: hitWidth,
+                                      height: hitHeight,
+                                    },
+                                  ]}
+                                  onPress={() => seekToMeasureRegion(region, item.page_number - 1)}
+                                />
+                              );
+                            })}
+                          </View>
                         ) : null}
 
                         {/* Annotation Layer */}
@@ -1336,10 +1547,13 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 214, 10, 0.18)',
     borderColor: 'rgba(196, 148, 0, 0.45)',
     borderWidth: 2,
-    borderRadius: 16,
+    borderRadius: 0,
     zIndex: 2,
   },
   pageImage: {
+    position: 'relative',
+  },
+  pageSvg: {
     position: 'relative',
   },
   imageContainer: {
@@ -1348,6 +1562,14 @@ const styles = StyleSheet.create({
     position: 'relative',
     width: '100%',
     flex: 1,
+  },
+  measureHitAreaLayer: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 3,
+  },
+  measureHitArea: {
+    position: 'absolute',
+    backgroundColor: 'transparent',
   },
   controlsContainer: {
     backgroundColor: COLORS.lightBrown,
