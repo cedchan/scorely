@@ -12,10 +12,29 @@ Scorely is a React Native / Expo project for collaborative sheet-music practice.
 Prerequisites:
 - Docker Desktop
 - Node.js + npm
+- Homebrew (macOS) - for installing mkcert
 
-Then, to launch the app, run `ENABLE_TUNNELS=1 ./start.sh` from the root directory. Note that this script was written for Mac.
+Then, to launch the app, run `./start.sh` from the root directory. Note that this script was written for Mac.
 
-This will launch the main app both locally and via a tunnel. You should use the local version for most requirements/testing. The tunnel version is **only** necessary for testing nod-to-turn-page on an iPad (camera use requires an HTTPS connection).
+**First-time setup:** The script will automatically install `mkcert` via Homebrew and generate local SSL certificates for HTTPS support. This enables secure connections needed for camera access on iPad.
+
+The app will be available at:
+- **Web app (local HTTP):** http://localhost:8081
+- **Web app (HTTPS for iPad):** https://YOUR_LOCAL_IP
+- **API docs:** https://YOUR_LOCAL_IP/docs
+
+### For iPad Testing (Camera/Nod Detection)
+
+The app uses HTTPS via nginx reverse proxy with mkcert certificates. To test on iPad:
+
+1. Run `./start.sh` (certificates auto-generated for your local IP)
+2. On iPad Safari, navigate to `https://YOUR_LOCAL_IP` (port 443, not 8081!)
+3. Accept the certificate warning **once** (covers both app and API)
+4. Camera features work immediately!
+
+**How it works:** Nginx provides HTTPS on port 443, proxying to both the Expo dev server (port 8081) and API (port 8443). Single certificate = single acceptance!
+
+**Alternative:** If you need remote access outside your local network, use `ENABLE_TUNNELS=1 ./start.sh` to create public HTTPS tunnels via localtunnel (less stable, only use if necessary).
 
 ## Demo overview by requirement
 
@@ -33,9 +52,9 @@ Run the standalone Expo app in `hello-world/` (a simple `npm start` suffices).
 
 ### 4. Gesture detection
 
-To test on an iPad, you must use the tunnel link rather than the normal local version (if just testing on a laptop, the local link is fine and more stable). In any score select the "Nod to Turn Page" button in the top right and grant camera permissions. To turn one page forward nod vigorously once. 
+To test on an iPad, navigate to `https://YOUR_LOCAL_IP` in Safari (requires HTTPS for camera access). In any score, select the "Nod to Turn Page" button in the top right and grant camera permissions. To turn one page forward, nod vigorously once.
 
-Note that you have to open both the links for the API and for the app itself in your browser and paste in the IP address as requested in order for this to work. 
+**Note:** Accept the certificate warning once when prompted - this covers both the app and API. 
 
 ### 5. Sheet music transcription/display
 

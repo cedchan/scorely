@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Scorely startup script
-# Starts Docker backend and Expo frontend
+# Starts Docker backend and Expo frontend with HTTPS support via mkcert
 #
 # Optional:
 #   ENABLE_TUNNELS=1 ./start.sh
@@ -48,7 +48,7 @@ wait_for_http() {
     local max_retries="${3:-60}"
     local retry_count=0
 
-    until curl -fsS "${url}" > /dev/null 2>&1; do
+    until curl -fsS -k "${url}" > /dev/null 2>&1; do
         retry_count=$((retry_count + 1))
         if [[ "${retry_count}" -ge "${max_retries}" ]]; then
             echo "❌ ${label} failed to start: ${url}"
@@ -56,6 +56,49 @@ wait_for_http() {
         fi
         sleep 1
     done
+}
+
+setup_certificates() {
+    echo "🔐 Checking SSL certificates..."
+
+    # Check if mkcert is installed
+    if ! command -v mkcert &> /dev/null; then
+        echo "⚠️  mkcert not found. Installing via Homebrew..."
+        if ! command -v brew &> /dev/null; then
+            echo "❌ Homebrew is required but not installed. Please install from https://brew.sh"
+            exit 1
+        fi
+        brew install mkcert
+    fi
+
+    # Install local CA if not already done
+    if ! mkcert -CAROOT &> /dev/null; then
+        echo "📜 Installing local Certificate Authority..."
+        mkcert -install
+    fi
+
+    # Get local IP address
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        LOCAL_IP="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo "localhost")"
+    else
+        LOCAL_IP="$(hostname -I | awk '{print $1}' || echo "localhost")"
+    fi
+
+    # Generate certificates if they don't exist or if IP has changed
+    CERT_DIR="./certs"
+    mkdir -p "${CERT_DIR}"
+
+    if [[ ! -f "${CERT_DIR}/localhost+3.pem" ]] || ! grep -q "${LOCAL_IP}" "${CERT_DIR}/localhost+3.pem" 2>/dev/null; then
+        echo "🔑 Generating SSL certificates for localhost and ${LOCAL_IP}..."
+        cd "${CERT_DIR}"
+        mkcert localhost 127.0.0.1 ::1 "${LOCAL_IP}"
+        cd ..
+        echo "✅ Certificates generated!"
+    else
+        echo "✅ Valid certificates found!"
+    fi
+
+    echo "${LOCAL_IP}"
 }
 
 start_localtunnel() {
@@ -102,23 +145,20 @@ if ! PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH" "${DOCKER_BIN}
     exit 1
 fi
 
+# Setup SSL certificates and get local IP
+LOCAL_IP="$(setup_certificates)"
+
 echo "📦 Starting Docker services (API + Audiveris)..."
 PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH" "${DOCKER_BIN}" compose up --build -d
 
 echo "⏳ Waiting for API to be ready..."
-wait_for_http "http://localhost:8000/" "API" 60
+wait_for_http "https://localhost:8443/" "API (HTTPS)" 60
 
 echo "✅ API is ready!"
 echo ""
 
 echo "📦 Updating frontend dependencies..."
 npm install
-
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    LOCAL_IP="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo "localhost")"
-else
-    LOCAL_IP="$(hostname -I | awk '{print $1}' || echo "localhost")"
-fi
 
 echo ""
 echo "🚀 Starting Expo development server..."
@@ -128,14 +168,22 @@ EXPO_PID=$!
 wait_for_http "http://localhost:8081" "Expo web app" 90
 
 echo ""
-echo "   📱 Local app: http://localhost:8081"
-echo "   🌐 LAN app:   http://${LOCAL_IP}:8081"
-echo "   🔌 API:       http://${LOCAL_IP}:8000"
-echo "   📚 Docs:      http://${LOCAL_IP}:8000/docs"
+echo "✅ Scorely is ready!"
+echo ""
+echo "   📱 Local (laptop):        http://localhost:8081"
+echo "   🔐 iPad (HTTPS):          https://${LOCAL_IP}"
+echo "   📚 API Docs:              https://${LOCAL_IP}/docs"
+echo ""
+echo "   💡 For iPad camera access:"
+echo "      • Open https://${LOCAL_IP} in Safari"
+echo "      • Accept certificate warning once"
+echo "      • Camera features will work!"
 
 if [[ "${ENABLE_TUNNELS}" == "1" ]]; then
     echo ""
-    echo "🔐 Starting HTTPS tunnels for remote/iPad access..."
+    echo "🔐 Starting public HTTPS tunnels (for remote access only)..."
+    echo "   Note: For local network iPad testing, use https://${LOCAL_IP} instead!"
+    echo ""
 
     # Read API tunnel data
     api_tunnel_output="$(start_localtunnel "8000" "API")"
@@ -152,11 +200,8 @@ if [[ "${ENABLE_TUNNELS}" == "1" ]]; then
     ENCODED_API_TUNNEL_URL="${API_TUNNEL_URL//:/%3A}"
     ENCODED_API_TUNNEL_URL="${ENCODED_API_TUNNEL_URL//\//%2F}"
 
-    echo ""
-    echo "   🌍 HTTPS app: ${WEB_TUNNEL_URL}/?api=${ENCODED_API_TUNNEL_URL}"
-    echo "   🌍 HTTPS API: ${API_TUNNEL_URL}"
-    echo ""
-    echo "   Use the HTTPS app URL above on iPad Safari for camera access."
+    echo "   🌍 Remote HTTPS app: ${WEB_TUNNEL_URL}/?api=${ENCODED_API_TUNNEL_URL}"
+    echo "   🌍 Remote HTTPS API: ${API_TUNNEL_URL}"
 fi
 
 echo ""

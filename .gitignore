@@ -34,3 +34,6 @@ backend/outputs/
 
 # Docker
 .docker/
+
+# SSL certificates (generated locally via mkcert)
+certs/
