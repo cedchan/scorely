@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -56,6 +56,7 @@ export default function PlayerScreen({ route, navigation }) {
   const [audioError, setAudioError] = useState(null);
   const [alignmentMappings, setAlignmentMappings] = useState([]);
   const [activeMeasure, setActiveMeasure] = useState(null);
+  const [activeMeasureIndex, setActiveMeasureIndex] = useState(null);
   // Nod state
   const [nodEnabled, setNodEnabled] = useState(false);
   // Annotation state
@@ -93,7 +94,30 @@ export default function PlayerScreen({ route, navigation }) {
     320,
     height - compactHeaderHeight - toolbarHeight - controlsHeight - pageVerticalPadding - pageTopPadding
   );
-  const measurePageRanges = (() => {
+  const measureRegionLookup = useMemo(() => {
+    const lookup = new Map();
+    pages.forEach((page, pageIndex) => {
+      (page.measure_regions || []).forEach((region) => {
+        const regionIndex = Number(region.measure_index);
+        if (!Number.isFinite(regionIndex) || lookup.has(regionIndex)) {
+          return;
+        }
+
+        lookup.set(regionIndex, {
+          ...region,
+          pageIndex,
+          pageNumber: page.page_number,
+        });
+      });
+    });
+    return lookup;
+  }, [pages]);
+
+  const measurePageRanges = useMemo(() => {
+    if (measureRegionLookup.size || !pages.length || !alignmentMappings.length) {
+      return [];
+    }
+
     if (!pages.length || !alignmentMappings.length) {
       return [];
     }
@@ -110,11 +134,33 @@ export default function PlayerScreen({ route, navigation }) {
         endMeasure: alignmentMappings[endIndex]?.measure ?? null,
       };
     });
-  })();
+  }, [alignmentMappings, measureRegionLookup, pages]);
 
   let [fontsLoaded] = useFonts({
     Afacad_400Regular,
   });
+
+  const normalizePageMeasureRegions = (pageList = []) => {
+    let fallbackMeasureIndex = 0;
+
+    return pageList.map((page) => {
+      const measureRegions = (page.measure_regions || []).map((region) => {
+        const parsedIndex = Number(region.measure_index);
+        const measureIndex = Number.isFinite(parsedIndex) ? parsedIndex : fallbackMeasureIndex;
+        fallbackMeasureIndex = Math.max(fallbackMeasureIndex + 1, measureIndex + 1);
+
+        return {
+          ...region,
+          measure_index: measureIndex,
+        };
+      });
+
+      return {
+        ...page,
+        measure_regions: measureRegions,
+      };
+    });
+  };
 
   useEffect(() => {
     const loadRenderedPages = async () => {
@@ -138,8 +184,9 @@ export default function PlayerScreen({ route, navigation }) {
         }
 
         setTitle(data.title || route.params?.fileName || 'Digital Score');
+        const normalizedPages = normalizePageMeasureRegions(data.pages || []);
         setPages(
-          data.pages.map((page) => ({
+          normalizedPages.map((page) => ({
             ...page,
             uri: `${apiBaseUrl}${page.image_path}?job=${encodeURIComponent(cacheToken)}&page=${page.page_number}`,
           }))
@@ -210,7 +257,15 @@ export default function PlayerScreen({ route, navigation }) {
           throw new Error(data.detail || 'Failed to load measure alignment.');
         }
 
-        setAlignmentMappings(data.mappings || []);
+        setAlignmentMappings(
+          (data.mappings || []).map((mapping, index) => {
+            const parsedIndex = Number(mapping.measure_index);
+            return {
+              ...mapping,
+              measure_index: Number.isFinite(parsedIndex) ? parsedIndex : index,
+            };
+          })
+        );
       } catch (loadError) {
         setAlignmentMappings([]);
       }
@@ -222,6 +277,7 @@ export default function PlayerScreen({ route, navigation }) {
   useEffect(() => {
     setIsPlaying(false);
     setActiveMeasure(null);
+    setActiveMeasureIndex(null);
   }, [playbackUrl]);
 
   // Annotation WebSocket connection
@@ -649,13 +705,22 @@ export default function PlayerScreen({ route, navigation }) {
     }
 
     const nextMeasure = alignmentMappings[nextIndex]?.measure ?? null;
+    const nextMeasureIndex = alignmentMappings[nextIndex]?.measure_index ?? nextIndex;
     setActiveMeasure(nextMeasure);
+    setActiveMeasureIndex(nextMeasureIndex);
+
+    const exactMeasureRegion =
+      nextMeasureIndex !== null ? measureRegionLookup.get(Number(nextMeasureIndex)) : null;
+    if (exactMeasureRegion && exactMeasureRegion.pageIndex !== currentPageRef.current) {
+      goToPage(exactMeasureRegion.pageIndex);
+      return;
+    }
 
     const nextPageIndex = measurePageRanges.findIndex(
       (range) => nextMeasure !== null && nextMeasure >= range.startMeasure && nextMeasure <= range.endMeasure
     );
 
-    if (nextPageIndex !== -1 && nextPageIndex !== currentPage) {
+    if (nextPageIndex !== -1 && nextPageIndex !== currentPageRef.current) {
       goToPage(nextPageIndex);
     }
   };
@@ -969,6 +1034,8 @@ export default function PlayerScreen({ route, navigation }) {
           const scale = Math.min(containerWidth / imageWidth, containerHeight / imageHeight);
           const displayedWidth = imageWidth * scale;
           const displayedHeight = imageHeight * scale;
+          const imageOffsetX = (containerWidth - displayedWidth) / 2;
+          const imageOffsetY = (containerHeight - displayedHeight) / 2;
 
           return (
             <View
@@ -990,10 +1057,21 @@ export default function PlayerScreen({ route, navigation }) {
                     padding: 0,
                   },
                 ]}
-              >
+                >
                 {(() => {
+                  const activeMeasureRegion =
+                    activeMeasureIndex !== null
+                      ? (item.measure_regions || []).find((region) => {
+                          const regionIndex = Number(region.measure_index);
+                          if (Number.isFinite(regionIndex)) {
+                            return regionIndex === Number(activeMeasureIndex);
+                          }
+                          return Number(region.measure) === Number(activeMeasure);
+                        })
+                      : null;
                   const range = measurePageRanges[item.page_number - 1];
                   const isActiveRange =
+                    !activeMeasureRegion &&
                     range &&
                     activeMeasure !== null &&
                     activeMeasure >= range.startMeasure &&
@@ -1004,6 +1082,31 @@ export default function PlayerScreen({ route, navigation }) {
                   const bandTopPercent =
                     range && isActiveRange ? (activeIndexWithinPage / measuresOnPage) * 100 : 0;
                   const bandHeightPercent = Math.max(12, 100 / measuresOnPage);
+                  const overlayInset = 8;
+                  const regionLeft = activeMeasureRegion
+                    ? imageOffsetX + activeMeasureRegion.x * displayedWidth
+                    : 0;
+                  const regionTop = activeMeasureRegion
+                    ? imageOffsetY + activeMeasureRegion.y * displayedHeight
+                    : 0;
+                  const regionRight = activeMeasureRegion
+                    ? imageOffsetX + (activeMeasureRegion.x + activeMeasureRegion.width) * displayedWidth
+                    : 0;
+                  const regionBottom = activeMeasureRegion
+                    ? imageOffsetY + (activeMeasureRegion.y + activeMeasureRegion.height) * displayedHeight
+                    : 0;
+                  const overlayLeft = activeMeasureRegion
+                    ? Math.max(imageOffsetX, regionLeft - overlayInset)
+                    : 0;
+                  const overlayTop = activeMeasureRegion
+                    ? Math.max(imageOffsetY, regionTop - overlayInset)
+                    : 0;
+                  const overlayRight = activeMeasureRegion
+                    ? Math.min(imageOffsetX + displayedWidth, regionRight + overlayInset)
+                    : 0;
+                  const overlayBottom = activeMeasureRegion
+                    ? Math.min(imageOffsetY + displayedHeight, regionBottom + overlayInset)
+                    : 0;
 
                   return (
                     <>
@@ -1020,12 +1123,28 @@ export default function PlayerScreen({ route, navigation }) {
                           resizeMode="contain"
                         />
 
+                        {activeMeasureRegion ? (
+                          <View
+                            pointerEvents="none"
+                            style={[
+                              styles.measureOverlay,
+                              {
+                                left: overlayLeft,
+                                top: overlayTop,
+                                width: Math.max(18, overlayRight - overlayLeft),
+                                height: Math.max(18, overlayBottom - overlayTop),
+                              },
+                            ]}
+                          />
+                        ) : null}
+
                         {isActiveRange ? (
                           <View
                             pointerEvents="none"
                             style={[
                               styles.measureOverlay,
                               {
+                                left: imageOffsetX,
                                 top: `${Math.min(88, bandTopPercent)}%`,
                                 height: `${Math.min(28, bandHeightPercent)}%`,
                                 width: displayedWidth,
@@ -1041,8 +1160,8 @@ export default function PlayerScreen({ route, navigation }) {
                           height={containerHeight}
                           imageWidth={displayedWidth}
                           imageHeight={displayedHeight}
-                          imageOffsetX={(containerWidth - displayedWidth) / 2}
-                          imageOffsetY={(containerHeight - displayedHeight) / 2}
+                          imageOffsetX={imageOffsetX}
+                          imageOffsetY={imageOffsetY}
                           annotations={annotations}
                           currentTool={currentTool}
                           currentColor={currentColor}
@@ -1214,9 +1333,6 @@ const styles = StyleSheet.create({
   },
   measureOverlay: {
     position: 'absolute',
-    left: 10,
-    right: 10,
-    top: 52,
     backgroundColor: 'rgba(255, 214, 10, 0.18)',
     borderColor: 'rgba(196, 148, 0, 0.45)',
     borderWidth: 2,

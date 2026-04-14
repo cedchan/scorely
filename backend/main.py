@@ -4,19 +4,21 @@ Scorely API - Backend for sheet music transcription, rendering, and conversion.
 import json
 import logging
 import os
+import re
 import shutil
 import struct
 import uuid
 import copy
 from pathlib import Path
 from typing import Dict, List, Optional, Set
+import xml.etree.ElementTree as ET
 
 import aiofiles
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from music21 import converter, metadata, stream, tempo, note
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import y_py as Y
 
 from audiveris_service import get_audiveris_service
@@ -42,6 +44,23 @@ app.add_middleware(
 BASE_DIR = Path(__file__).resolve().parent
 CLOUD_DIR = BASE_DIR / "cloud"
 CLOUD_DIR.mkdir(exist_ok=True)
+HARDCODED_PDF_MXL_MAP = {
+    "sample1.pdf": BASE_DIR / "uploads" / "sample1.mxl",
+    "sample2.pdf": BASE_DIR / "uploads" / "sample2.mxl",
+}
+VEROVIO_OPTIONS = {
+    "pageWidth": 2100,
+    "pageHeight": 2970,
+    "scale": 42,
+    "footer": "none",
+    "header": "none",
+    "adjustPageHeight": False,
+}
+SVG_NS = {"svg": "http://www.w3.org/2000/svg"}
+SVG_NUMBER_PATTERN = re.compile(r"-?\d+(?:\.\d+)?")
+SVG_TRANSLATE_PATTERN = re.compile(
+    r"translate\(\s*(-?\d+(?:\.\d+)?)\s*(?:[, ]\s*(-?\d+(?:\.\d+)?))?"
+)
 
 # In-memory job tracking
 jobs: Dict[str, dict] = {}
@@ -55,6 +74,15 @@ def get_job_dir(job_id: str) -> Path:
     job_dir = CLOUD_DIR / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
     return job_dir
+
+
+def get_hardcoded_mxl_for_pdf(filename: str) -> Optional[Path]:
+    """Return a hardcoded MusicXML path for specific demo PDFs."""
+    pdf_name = Path(filename).name.lower()
+    mapped_path = HARDCODED_PDF_MXL_MAP.get(pdf_name)
+    if mapped_path is None:
+        return None
+    return mapped_path.expanduser()
 
 
 # --- WEBSOCKET CONNECTION MANAGER ---
@@ -143,7 +171,7 @@ class FilePaths(BaseModel):
     full_audio: Optional[str] = None
     full_midi: Optional[str] = None
     score_pages: Optional[str] = None
-    parts: List[PartInfo] = []
+    parts: List[PartInfo] = Field(default_factory=list)
 
 
 class JobStatusResponse(BaseModel):
@@ -157,6 +185,7 @@ class JobStatusResponse(BaseModel):
 class AlignmentPoint(BaseModel):
     time_seconds: float
     measure: int
+    measure_index: int
     beat: float
 
 
@@ -166,25 +195,35 @@ class AlignmentResponse(BaseModel):
     mappings: List[AlignmentPoint]
 
 
+class MeasureRegion(BaseModel):
+    measure: int
+    measure_index: int
+    x: float
+    y: float
+    width: float
+    height: float
+
+
 class ScorePageInfo(BaseModel):
     page_number: int
     image_path: str
     width: Optional[int] = None
     height: Optional[int] = None
+    measure_regions: List[MeasureRegion] = Field(default_factory=list)
 
 
 class ScoreMetadata(BaseModel):
     title: Optional[str] = None
     composer: Optional[str] = None
     total_pages: int
-    pages: List[ScorePageInfo]
+    pages: List[ScorePageInfo] = Field(default_factory=list)
 
 
 class ScorePagesResponse(BaseModel):
     job_id: str
     title: Optional[str] = None
     page_count: int
-    pages: List[ScorePageInfo]
+    pages: List[ScorePageInfo] = Field(default_factory=list)
     musicxml_path: Optional[str] = None
 
 
@@ -215,10 +254,21 @@ def extract_alignment(score_path: Path) -> Dict:
             return {"tempo": 120.0, "mappings": []}
 
         part = parts[0]
-        for m in part.getElementsByClass("Measure"):
+        for measure_index, m in enumerate(part.getElementsByClass("Measure")):
             # Offset is in quarter notes
             time_sec = float(m.offset * seconds_per_quarter)
-            mappings.append({"time_seconds": time_sec, "measure": int(m.number), "beat": 1.0})
+            try:
+                measure_number = int(m.number)
+            except (TypeError, ValueError):
+                measure_number = measure_index + 1
+            mappings.append(
+                {
+                    "time_seconds": time_sec,
+                    "measure": measure_number,
+                    "measure_index": measure_index,
+                    "beat": 1.0,
+                }
+            )
 
         return {"tempo": float(current_tempo), "mappings": mappings}
     except Exception as exc:
@@ -237,6 +287,165 @@ def _read_png_dimensions(image_path: Path) -> tuple[int, int]:
         return width, height
     except Exception:
         return 1240, 1754
+
+
+def _create_verovio_toolkit(musicxml_path: Path):
+    """Load a MusicXML file into a Verovio toolkit with the app's page settings."""
+    import verovio
+
+    toolkit = verovio.toolkit()
+    toolkit.setOptions(VEROVIO_OPTIONS)
+    toolkit.loadFile(str(musicxml_path))
+    return toolkit
+
+
+def _parse_svg_translate(transform: Optional[str]) -> tuple[float, float]:
+    """Extract translate(x, y) from an SVG transform string."""
+    if not transform:
+        return 0.0, 0.0
+
+    match = SVG_TRANSLATE_PATTERN.search(transform)
+    if not match:
+        return 0.0, 0.0
+
+    return float(match.group(1)), float(match.group(2) or 0.0)
+
+
+def _update_bounds(bounds: Dict[str, float], x: float, y: float) -> None:
+    """Expand a bounding box in-place to include the given point."""
+    bounds["min_x"] = min(bounds["min_x"], x)
+    bounds["max_x"] = max(bounds["max_x"], x)
+    bounds["min_y"] = min(bounds["min_y"], y)
+    bounds["max_y"] = max(bounds["max_y"], y)
+
+
+def _collect_relevant_svg_bounds(element, bounds: Dict[str, float], offset_x: float = 0.0, offset_y: float = 0.0):
+    """Collect bounds from staff and barline SVG geometry within a measure."""
+    translate_x, translate_y = _parse_svg_translate(element.get("transform"))
+    current_x = offset_x + translate_x
+    current_y = offset_y + translate_y
+
+    tag = element.tag.split("}")[-1]
+    if tag == "path":
+        coordinates = [float(value) for value in SVG_NUMBER_PATTERN.findall(element.get("d", ""))]
+        for index in range(0, len(coordinates) - 1, 2):
+            _update_bounds(bounds, current_x + coordinates[index], current_y + coordinates[index + 1])
+    elif tag in {"text", "use"}:
+        x_value = element.get("x")
+        y_value = element.get("y")
+        if x_value is not None and y_value is not None:
+            _update_bounds(bounds, current_x + float(x_value), current_y + float(y_value))
+
+    for child in list(element):
+        _collect_relevant_svg_bounds(child, bounds, current_x, current_y)
+
+
+def _measure_region_from_svg_element(
+    measure_element,
+    toolkit,
+    page_width: float,
+    page_height: float,
+) -> Optional[Dict]:
+    """Build a normalized measure rectangle from a Verovio SVG measure group."""
+    measure_attributes = toolkit.getElementAttr(measure_element.get("id"))
+    measure_number = measure_attributes.get("n")
+    if measure_number is None:
+        return None
+
+    try:
+        measure_value = int(measure_number)
+    except (TypeError, ValueError):
+        return None
+
+    bounds = {
+        "min_x": float("inf"),
+        "max_x": float("-inf"),
+        "min_y": float("inf"),
+        "max_y": float("-inf"),
+    }
+
+    for child in list(measure_element):
+        classes = set((child.get("class") or "").split())
+        if "staff" not in classes and "barLine" not in classes:
+            continue
+        _collect_relevant_svg_bounds(child, bounds)
+
+    if bounds["min_x"] == float("inf") or bounds["min_y"] == float("inf"):
+        return None
+
+    min_x = max(0.0, bounds["min_x"] / page_width)
+    max_x = min(1.0, bounds["max_x"] / page_width)
+    min_y = max(0.0, bounds["min_y"] / page_height)
+    max_y = min(1.0, bounds["max_y"] / page_height)
+    width = max(0.0, max_x - min_x)
+    height = max(0.0, max_y - min_y)
+
+    if width <= 0.0 or height <= 0.0:
+        return None
+
+    return {
+        "measure": measure_value,
+        "measure_index": -1,
+        "x": round(min_x, 6),
+        "y": round(min_y, 6),
+        "width": round(width, 6),
+        "height": round(height, 6),
+    }
+
+
+def _get_svg_viewbox_size(root) -> tuple[float, float]:
+    """Read the coordinate space used by Verovio's rendered SVG."""
+    for svg_element in root.findall(".//svg:svg", SVG_NS):
+        view_box = svg_element.get("viewBox")
+        if not view_box:
+            continue
+        values = [float(value) for value in view_box.split()]
+        if len(values) == 4 and values[2] > 0 and values[3] > 0:
+            return values[2], values[3]
+
+    return float(VEROVIO_OPTIONS["pageWidth"]), float(VEROVIO_OPTIONS["pageHeight"])
+
+
+def _extract_measure_regions_from_svg(svg: str, toolkit) -> List[Dict]:
+    """Extract normalized measure rectangles from a rendered Verovio SVG page."""
+    root = ET.fromstring(svg)
+    page_width, page_height = _get_svg_viewbox_size(root)
+    measure_regions = []
+    for measure_element in root.findall(".//svg:g", SVG_NS):
+        classes = set((measure_element.get("class") or "").split())
+        if "measure" not in classes:
+            continue
+        measure_region = _measure_region_from_svg_element(
+            measure_element,
+            toolkit,
+            page_width,
+            page_height,
+        )
+        if measure_region is not None:
+            measure_regions.append(measure_region)
+
+    measure_regions.sort(key=lambda region: region["measure"])
+    return measure_regions
+
+
+def _build_measure_regions_by_page(musicxml_path: Path) -> Dict[int, List[Dict]]:
+    """Render SVG pages with Verovio and return extracted measure rectangles for each page."""
+    toolkit = _create_verovio_toolkit(musicxml_path)
+    page_count = toolkit.getPageCount()
+    if page_count <= 0:
+        return {}
+
+    measure_regions_by_page = {
+        page_number: _extract_measure_regions_from_svg(toolkit.renderToSVG(page_number), toolkit)
+        for page_number in range(1, page_count + 1)
+    }
+    measure_index = 0
+    for page_number in sorted(measure_regions_by_page):
+        for region in measure_regions_by_page[page_number]:
+            region["measure_index"] = measure_index
+            measure_index += 1
+
+    return measure_regions_by_page
 
 
 def _build_manifest_from_existing_pages(job_id: str, musicxml_path: Path) -> Optional[Dict]:
@@ -258,6 +467,7 @@ def _build_manifest_from_existing_pages(job_id: str, musicxml_path: Path) -> Opt
     if not title:
         title = "Untitled score"
 
+    measure_regions_by_page = _build_measure_regions_by_page(musicxml_path)
     pages = []
     for index, page_path in enumerate(existing_pages, start=1):
         width, height = _read_png_dimensions(page_path)
@@ -267,6 +477,7 @@ def _build_manifest_from_existing_pages(job_id: str, musicxml_path: Path) -> Opt
                 "image_path": f"/api/download/{job_id}/{page_path.name}",
                 "width": width,
                 "height": height,
+                "measure_regions": measure_regions_by_page.get(index, []),
             }
         )
 
@@ -279,10 +490,11 @@ def _build_manifest_from_existing_pages(job_id: str, musicxml_path: Path) -> Opt
     }
 
 
-def _normalize_manifest(manifest: Dict, job_id: str) -> Dict:
+def _normalize_manifest(manifest: Dict, job_id: str, musicxml_path: Optional[Path] = None) -> Dict:
     """Fill in missing fields for older cached page manifests."""
     job_dir = get_job_dir(job_id)
     normalized_pages = []
+    needs_measure_regions = False
     for page in manifest.get("pages", []):
         normalized_page = dict(page)
         # Extract filename from path (handles both old flat and new nested paths)
@@ -298,9 +510,26 @@ def _normalize_manifest(manifest: Dict, job_id: str) -> Dict:
             width, height = _read_png_dimensions(image_path)
         normalized_page["width"] = width
         normalized_page["height"] = height
+        normalized_page["measure_regions"] = normalized_page.get("measure_regions", [])
+        has_measure_indices = all(
+            "measure_index" in region for region in normalized_page["measure_regions"]
+        )
+        needs_measure_regions = (
+            needs_measure_regions
+            or not normalized_page["measure_regions"]
+            or not has_measure_indices
+        )
         # Ensure path uses new nested format
         normalized_page["image_path"] = f"/api/download/{job_id}/{image_name}"
         normalized_pages.append(normalized_page)
+
+    if needs_measure_regions and musicxml_path and musicxml_path.exists():
+        try:
+            measure_regions_by_page = _build_measure_regions_by_page(musicxml_path)
+            for page in normalized_pages:
+                page["measure_regions"] = measure_regions_by_page.get(page["page_number"], page["measure_regions"])
+        except Exception as exc:
+            logger.warning("Failed to backfill measure regions for %s: %s", job_id, exc)
 
     manifest["pages"] = normalized_pages
     manifest["page_count"] = manifest.get("page_count", len(normalized_pages))
@@ -310,22 +539,10 @@ def _normalize_manifest(manifest: Dict, job_id: str) -> Dict:
 def _render_pages_with_verovio(job_id: str, musicxml_path: Path) -> Dict:
     """Render MusicXML to paginated PNG score pages using Verovio."""
     import cairosvg
-    import verovio
 
     job_dir = get_job_dir(job_id)
 
-    toolkit = verovio.toolkit()
-    toolkit.setOptions(
-        {
-            "pageWidth": 2100,
-            "pageHeight": 2970,
-            "scale": 42,
-            "footer": "none",
-            "header": "none",
-            "adjustPageHeight": False,
-        }
-    )
-    toolkit.loadFile(str(musicxml_path))
+    toolkit = _create_verovio_toolkit(musicxml_path)
 
     page_count = toolkit.getPageCount()
     if page_count <= 0:
@@ -353,6 +570,7 @@ def _render_pages_with_verovio(job_id: str, musicxml_path: Path) -> Dict:
                 "image_path": f"/api/download/{job_id}/{png_path.name}",
                 "width": width,
                 "height": height,
+                "measure_regions": _extract_measure_regions_from_svg(svg, toolkit),
             }
         )
 
@@ -371,7 +589,7 @@ def render_score_pages(job_id: str, musicxml_path: Path) -> Dict:
     manifest_path = job_dir / "manifest.json"
 
     if manifest_path.exists():
-        manifest = _normalize_manifest(json.loads(manifest_path.read_text()), job_id)
+        manifest = _normalize_manifest(json.loads(manifest_path.read_text()), job_id, musicxml_path)
         manifest_path.write_text(json.dumps(manifest, indent=2))
     else:
         manifest = _build_manifest_from_existing_pages(job_id, musicxml_path)
@@ -596,12 +814,41 @@ async def transcribe_pdf(background_tasks: BackgroundTasks, file: UploadFile = F
         async with aiofiles.open(pdf_path, "wb") as out_file:
             await out_file.write(content)
 
+        hardcoded_mxl_path = get_hardcoded_mxl_for_pdf(file.filename)
+        if hardcoded_mxl_path is not None and not hardcoded_mxl_path.exists():
+            raise HTTPException(
+                status_code=500,
+                detail=f"Hardcoded MusicXML file not found: {hardcoded_mxl_path}",
+            )
+
         jobs[job_id] = {
             "status": "processing",
             "progress": {"transcription": "queued", "audio_conversion": "not_started"},
             "files": {"musicxml": None, "score_pages": None, "parts": []},
             "original_filename": original_filename,
         }
+
+        if hardcoded_mxl_path is not None:
+            canonical_mxl_path = job_dir / f"{job_id}.mxl"
+            shutil.copyfile(hardcoded_mxl_path, canonical_mxl_path)
+            jobs[job_id]["progress"]["transcription"] = "completed"
+            jobs[job_id]["progress"]["audio_conversion"] = "queued"
+            jobs[job_id]["files"]["musicxml"] = f"/api/download/{job_id}/{job_id}.mxl"
+
+            logger.info(
+                "Using hardcoded MusicXML for %s from %s",
+                file.filename,
+                hardcoded_mxl_path,
+            )
+
+            background_tasks.add_task(render_score_pages, job_id, canonical_mxl_path)
+            background_tasks.add_task(run_audio_pipeline, job_id, canonical_mxl_path)
+
+            return {
+                "job_id": job_id,
+                "status": "queued",
+                "message": "Using hardcoded MusicXML for this PDF.",
+            }
 
         background_tasks.add_task(run_full_pipeline, job_id, pdf_path)
 
@@ -660,11 +907,17 @@ async def convert_to_audio(background_tasks: BackgroundTasks, request: Conversio
 
 @app.get("/api/alignment/{job_id}", response_model=AlignmentResponse)
 async def get_alignment_data(job_id: str):
-    if job_id not in jobs or "alignment" not in jobs[job_id]:
+    cached_alignment = jobs.get(job_id, {}).get("alignment")
+    cached_mappings = cached_alignment.get("mappings", []) if cached_alignment else []
+    has_measure_indices = all("measure_index" in mapping for mapping in cached_mappings)
+
+    if job_id not in jobs or "alignment" not in jobs[job_id] or not has_measure_indices:
         job_dir = get_job_dir(job_id)
         mxl_path = job_dir / f"{job_id}.mxl"
         if mxl_path.exists():
             alignment = extract_alignment(mxl_path)
+            if job_id in jobs:
+                jobs[job_id]["alignment"] = alignment
             return {"job_id": job_id, **alignment}
         raise HTTPException(status_code=404, detail="Alignment data not found")
 
@@ -692,13 +945,13 @@ async def get_score_metadata(job_id: str):
 @app.get("/api/score-pages/{job_id}", response_model=ScorePagesResponse)
 async def get_score_pages(job_id: str):
     job_dir = get_job_dir(job_id)
+    mxl_path = job_dir / f"{job_id}.mxl"
     manifest_path = job_dir / "manifest.json"
     if manifest_path.exists():
-        manifest = _normalize_manifest(json.loads(manifest_path.read_text()), job_id)
+        manifest = _normalize_manifest(json.loads(manifest_path.read_text()), job_id, mxl_path)
         manifest_path.write_text(json.dumps(manifest, indent=2))
         return manifest
 
-    mxl_path = job_dir / f"{job_id}.mxl"
     if not mxl_path.exists():
         raise HTTPException(status_code=404, detail="Rendered score pages not found")
 

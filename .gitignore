@@ -23,7 +23,9 @@ __pycache__/
 venv/
 env/
 ENV/
-backend/uploads/
+backend/uploads/*
+!backend/uploads/sample1.mxl
+!backend/uploads/sample2.mxl
 backend/outputs/
 *.log
 
