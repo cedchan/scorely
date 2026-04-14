@@ -1,0 +1,521 @@
+{
+  "job_id": "sample1",
+  "title": "Canon in D Violin Duet",
+  "page_count": 3,
+  "pages": [
+    {
+      "page_number": 1,
+      "image_path": "page_1.svg",
+      "width": 882,
+      "height": 1248,
+      "measure_regions": [
+        {
+          "measure": 1,
+          "measure_index": 0,
+          "x": 0.091571,
+          "y": 0.068801,
+          "width": 0.164619,
+          "height": 0.080848
+        },
+        {
+          "measure": 2,
+          "measure_index": 1,
+          "x": 0.26019,
+          "y": 0.068801,
+          "width": 0.086095,
+          "height": 0.080848
+        },
+        {
+          "measure": 3,
+          "measure_index": 2,
+          "x": 0.350286,
+          "y": 0.068801,
+          "width": 0.153,
+          "height": 0.080848
+        },
+        {
+          "measure": 4,
+          "measure_index": 3,
+          "x": 0.507286,
+          "y": 0.068801,
+          "width": 0.153,
+          "height": 0.080848
+        },
+        {
+          "measure": 5,
+          "measure_index": 4,
+          "x": 0.664286,
+          "y": 0.062741,
+          "width": 0.153,
+          "height": 0.09297
+        },
+        {
+          "measure": 6,
+          "measure_index": 5,
+          "x": 0.821286,
+          "y": 0.065771,
+          "width": 0.153,
+          "height": 0.09398
+        },
+        {
+          "measure": 7,
+          "measure_index": 6,
+          "x": 0.076,
+          "y": 0.200956,
+          "width": 0.261286,
+          "height": 0.095899
+        },
+        {
+          "measure": 8,
+          "measure_index": 7,
+          "x": 0.341286,
+          "y": 0.200956,
+          "width": 0.205524,
+          "height": 0.087818
+        },
+        {
+          "measure": 9,
+          "measure_index": 8,
+          "x": 0.55081,
+          "y": 0.197926,
+          "width": 0.205524,
+          "height": 0.092936
+        },
+        {
+          "measure": 10,
+          "measure_index": 9,
+          "x": 0.760333,
+          "y": 0.194896,
+          "width": 0.213905,
+          "height": 0.102027
+        },
+        {
+          "measure": 11,
+          "measure_index": 10,
+          "x": 0.076,
+          "y": 0.328229,
+          "width": 0.333905,
+          "height": 0.102364
+        },
+        {
+          "measure": 12,
+          "measure_index": 11,
+          "x": 0.413905,
+          "y": 0.332774,
+          "width": 0.278143,
+          "height": 0.094788
+        },
+        {
+          "measure": 13,
+          "measure_index": 12,
+          "x": 0.696048,
+          "y": 0.33429,
+          "width": 0.278143,
+          "height": 0.093879
+        },
+        {
+          "measure": 14,
+          "measure_index": 13,
+          "x": 0.076,
+          "y": 0.463077,
+          "width": 0.333905,
+          "height": 0.097818
+        },
+        {
+          "measure": 15,
+          "measure_index": 14,
+          "x": 0.413905,
+          "y": 0.474593,
+          "width": 0.278143,
+          "height": 0.082936
+        },
+        {
+          "measure": 16,
+          "measure_index": 15,
+          "x": 0.696048,
+          "y": 0.462471,
+          "width": 0.278143,
+          "height": 0.104485
+        },
+        {
+          "measure": 17,
+          "measure_index": 16,
+          "x": 0.076,
+          "y": 0.600754,
+          "width": 0.244762,
+          "height": 0.108088
+        },
+        {
+          "measure": 18,
+          "measure_index": 17,
+          "x": 0.324762,
+          "y": 0.608902,
+          "width": 0.201143,
+          "height": 0.086909
+        },
+        {
+          "measure": 19,
+          "measure_index": 18,
+          "x": 0.529905,
+          "y": 0.603448,
+          "width": 0.444333,
+          "height": 0.100444
+        },
+        {
+          "measure": 20,
+          "measure_index": 19,
+          "x": 0.076,
+          "y": 0.733751,
+          "width": 0.475,
+          "height": 0.100646
+        },
+        {
+          "measure": 21,
+          "measure_index": 20,
+          "x": 0.555,
+          "y": 0.730721,
+          "width": 0.419238,
+          "height": 0.121253
+        }
+      ]
+    },
+    {
+      "page_number": 2,
+      "image_path": "page_2.svg",
+      "width": 882,
+      "height": 1248,
+      "measure_regions": [
+        {
+          "measure": 22,
+          "measure_index": 21,
+          "x": 0.076,
+          "y": 0.019407,
+          "width": 0.475,
+          "height": 0.11903
+        },
+        {
+          "measure": 23,
+          "measure_index": 22,
+          "x": 0.555,
+          "y": 0.040013,
+          "width": 0.419238,
+          "height": 0.092364
+        },
+        {
+          "measure": 24,
+          "measure_index": 23,
+          "x": 0.076,
+          "y": 0.173347,
+          "width": 0.493238,
+          "height": 0.095394
+        },
+        {
+          "measure": 25,
+          "measure_index": 24,
+          "x": 0.573238,
+          "y": 0.167286,
+          "width": 0.19881,
+          "height": 0.09499
+        },
+        {
+          "measure": 26,
+          "measure_index": 25,
+          "x": 0.776048,
+          "y": 0.170316,
+          "width": 0.198238,
+          "height": 0.085966
+        },
+        {
+          "measure": 27,
+          "measure_index": 26,
+          "x": 0.076,
+          "y": 0.29062,
+          "width": 0.333905,
+          "height": 0.096909
+        },
+        {
+          "measure": 28,
+          "measure_index": 27,
+          "x": 0.413905,
+          "y": 0.295165,
+          "width": 0.278143,
+          "height": 0.092364
+        },
+        {
+          "measure": 29,
+          "measure_index": 28,
+          "x": 0.696048,
+          "y": 0.29062,
+          "width": 0.278143,
+          "height": 0.117515
+        },
+        {
+          "measure": 30,
+          "measure_index": 29,
+          "x": 0.076,
+          "y": 0.440956,
+          "width": 0.333905,
+          "height": 0.097145
+        },
+        {
+          "measure": 31,
+          "measure_index": 30,
+          "x": 0.413905,
+          "y": 0.436074,
+          "width": 0.278143,
+          "height": 0.095966
+        },
+        {
+          "measure": 32,
+          "measure_index": 31,
+          "x": 0.696048,
+          "y": 0.443044,
+          "width": 0.278143,
+          "height": 0.104485
+        },
+        {
+          "measure": 33,
+          "measure_index": 32,
+          "x": 0.076,
+          "y": 0.576377,
+          "width": 0.315048,
+          "height": 0.086909
+        },
+        {
+          "measure": 34,
+          "measure_index": 33,
+          "x": 0.395048,
+          "y": 0.570316,
+          "width": 0.259286,
+          "height": 0.106
+        },
+        {
+          "measure": 35,
+          "measure_index": 34,
+          "x": 0.658333,
+          "y": 0.566377,
+          "width": 0.315952,
+          "height": 0.108424
+        },
+        {
+          "measure": 36,
+          "measure_index": 35,
+          "x": 0.076,
+          "y": 0.704256,
+          "width": 0.475,
+          "height": 0.097818
+        },
+        {
+          "measure": 37,
+          "measure_index": 36,
+          "x": 0.555,
+          "y": 0.698195,
+          "width": 0.419238,
+          "height": 0.106572
+        },
+        {
+          "measure": 38,
+          "measure_index": 37,
+          "x": 0.076,
+          "y": 0.84365,
+          "width": 0.475,
+          "height": 0.088391
+        },
+        {
+          "measure": 39,
+          "measure_index": 38,
+          "x": 0.555,
+          "y": 0.843044,
+          "width": 0.419238,
+          "height": 0.104485
+        }
+      ]
+    },
+    {
+      "page_number": 3,
+      "image_path": "page_3.svg",
+      "width": 882,
+      "height": 1248,
+      "measure_regions": [
+        {
+          "measure": 40,
+          "measure_index": 39,
+          "x": 0.076,
+          "y": 0.037051,
+          "width": 0.336476,
+          "height": 0.101455
+        },
+        {
+          "measure": 41,
+          "measure_index": 40,
+          "x": 0.416476,
+          "y": 0.030081,
+          "width": 0.169286,
+          "height": 0.095966
+        },
+        {
+          "measure": 42,
+          "measure_index": 41,
+          "x": 0.589762,
+          "y": 0.043111,
+          "width": 0.166381,
+          "height": 0.086909
+        },
+        {
+          "measure": 43,
+          "measure_index": 42,
+          "x": 0.760143,
+          "y": 0.041024,
+          "width": 0.214143,
+          "height": 0.091017
+        },
+        {
+          "measure": 44,
+          "measure_index": 43,
+          "x": 0.076,
+          "y": 0.17099,
+          "width": 0.242333,
+          "height": 0.094384
+        },
+        {
+          "measure": 45,
+          "measure_index": 44,
+          "x": 0.322333,
+          "y": 0.168296,
+          "width": 0.204476,
+          "height": 0.095966
+        },
+        {
+          "measure": 46,
+          "measure_index": 45,
+          "x": 0.53081,
+          "y": 0.164929,
+          "width": 0.218905,
+          "height": 0.100444
+        },
+        {
+          "measure": 47,
+          "measure_index": 46,
+          "x": 0.753714,
+          "y": 0.170384,
+          "width": 0.220524,
+          "height": 0.087818
+        },
+        {
+          "measure": 48,
+          "measure_index": 47,
+          "x": 0.076,
+          "y": 0.314492,
+          "width": 0.296,
+          "height": 0.093879
+        },
+        {
+          "measure": 49,
+          "measure_index": 48,
+          "x": 0.376,
+          "y": 0.306343,
+          "width": 0.180095,
+          "height": 0.103138
+        },
+        {
+          "measure": 50,
+          "measure_index": 49,
+          "x": 0.560095,
+          "y": 0.306343,
+          "width": 0.190524,
+          "height": 0.095057
+        },
+        {
+          "measure": 51,
+          "measure_index": 50,
+          "x": 0.754619,
+          "y": 0.314492,
+          "width": 0.219667,
+          "height": 0.089939
+        },
+        {
+          "measure": 52,
+          "measure_index": 51,
+          "x": 0.076,
+          "y": 0.459912,
+          "width": 0.193905,
+          "height": 0.083845
+        },
+        {
+          "measure": 53,
+          "measure_index": 52,
+          "x": 0.273905,
+          "y": 0.446882,
+          "width": 0.181762,
+          "height": 0.096875
+        },
+        {
+          "measure": 54,
+          "measure_index": 53,
+          "x": 0.459667,
+          "y": 0.446882,
+          "width": 0.166429,
+          "height": 0.102936
+        },
+        {
+          "measure": 55,
+          "measure_index": 54,
+          "x": 0.630095,
+          "y": 0.446882,
+          "width": 0.166429,
+          "height": 0.108997
+        },
+        {
+          "measure": 56,
+          "measure_index": 55,
+          "x": 0.800524,
+          "y": 0.451764,
+          "width": 0.173762,
+          "height": 0.105024
+        },
+        {
+          "measure": 57,
+          "measure_index": 56,
+          "x": 0.076,
+          "y": 0.590182,
+          "width": 0.233524,
+          "height": 0.099939
+        },
+        {
+          "measure": 58,
+          "measure_index": 57,
+          "x": 0.313524,
+          "y": 0.596242,
+          "width": 0.167429,
+          "height": 0.089333
+        },
+        {
+          "measure": 59,
+          "measure_index": 58,
+          "x": 0.484952,
+          "y": 0.596242,
+          "width": 0.121762,
+          "height": 0.080848
+        },
+        {
+          "measure": 60,
+          "measure_index": 59,
+          "x": 0.610714,
+          "y": 0.596242,
+          "width": 0.077238,
+          "height": 0.080848
+        },
+        {
+          "measure": 61,
+          "measure_index": 60,
+          "x": 0.691952,
+          "y": 0.596242,
+          "width": 0.084952,
+          "height": 0.080848
+        }
+      ]
+    }
+  ],
+  "musicxml_path": "sample1.mxl",
+  "measure_region_version": 2
+}

@@ -16,8 +16,6 @@ import { useFonts, Afacad_400Regular } from '@expo-google-fonts/afacad';
 import { FontAwesomeIcon } from '@fortawesome/react-native-fontawesome';
 import {
   faBars,
-  faCheckCircle,
-  faClock,
   faFileMusic,
   faGrip,
   faMagnifyingGlass,
@@ -62,7 +60,7 @@ const DEFAULT_PROJECTS = [
   {
     id: 'project-empty-1',
     title: 'Untitled Score',
-    subtitle: 'No pages rendered yet',
+    subtitle: '',
     icon: faFileMusic,
     action: 'placeholder',
     kind: 'score',
@@ -71,7 +69,7 @@ const DEFAULT_PROJECTS = [
   {
     id: 'project-empty-2',
     title: 'Untitled Score',
-    subtitle: 'No pages rendered yet',
+    subtitle: '',
     icon: faFileMusic,
     action: 'placeholder',
     kind: 'score',
@@ -120,10 +118,6 @@ export default function UploadScreen({ navigation }) {
   const { width } = useWindowDimensions();
   const apiBaseUrl = getApiBaseUrl();
 
-  const [selectedFile, setSelectedFile] = useState(null);
-  const [statusText, setStatusText] = useState('Choose a piece to start transcription.');
-  const [isLoading, setIsLoading] = useState(false);
-  const [jobId, setJobId] = useState(null);
   const [latestProject, setLatestProject] = useState(null);
   const [viewMode, setViewMode] = useState('grid');
   const [searchQuery, setSearchQuery] = useState('');
@@ -243,14 +237,7 @@ export default function UploadScreen({ navigation }) {
       if (!response.ok) {
         throw new Error(job.detail || 'Failed to check transcription status.');
       }
-
       const transcriptionDone = job.progress?.transcription === 'completed';
-
-      setStatusText(
-        transcriptionDone
-          ? 'Transcription finished. Preparing readable pages...'
-          : 'Transcribing the uploaded file into readable notation...'
-      );
 
       if (job.error || job.status === 'failed') {
         throw new Error(job.error || 'Transcription failed.');
@@ -258,7 +245,6 @@ export default function UploadScreen({ navigation }) {
 
       if (transcriptionDone && job.files?.score_pages) {
         clearPollTimer();
-        setIsLoading(false);
         setLatestProject({
           id: `project-${nextJobId}`,
           title: fileName,
@@ -280,8 +266,6 @@ export default function UploadScreen({ navigation }) {
       }, 2000);
     } catch (error) {
       clearPollTimer();
-      setIsLoading(false);
-      setStatusText(`We could not complete transcription. ${error.message}`);
       Alert.alert('Transcription Error', error.message);
     }
   };
@@ -307,11 +291,6 @@ export default function UploadScreen({ navigation }) {
       });
     }
 
-    setIsLoading(true);
-    setStatusText(
-      isMusicXML ? 'Uploading MusicXML to the backend...' : 'Uploading PDF to the backend...'
-    );
-
     try {
       const response = await fetch(`${apiBaseUrl}/api/transcribe`, {
         method: 'POST',
@@ -323,14 +302,8 @@ export default function UploadScreen({ navigation }) {
         throw new Error(data.detail || 'Upload failed.');
       }
 
-      setJobId(data.job_id);
-      setStatusText(
-        isMusicXML ? 'Processing MusicXML file...' : 'Upload complete. Waiting for transcription...'
-      );
       pollJobStatus(data.job_id, fileAsset.name || 'Uploaded score');
     } catch (error) {
-      setIsLoading(false);
-      setStatusText('Upload failed.');
       Alert.alert(
         'Upload Error',
         `${error.message}\n\nMake sure the backend is running at ${apiBaseUrl}.`
@@ -365,7 +338,6 @@ export default function UploadScreen({ navigation }) {
         return;
       }
 
-      setSelectedFile(fileAsset);
       clearPollTimer();
       uploadPdf(fileAsset);
     } catch (err) {
@@ -424,25 +396,15 @@ export default function UploadScreen({ navigation }) {
           <View style={styles.topColumn}>
             <View style={styles.heroBlock}>
               <Text style={styles.brand}>Scorely</Text>
-              <Text style={styles.heroTitle}>
-                Your rehearsal library, ready to open and play.
-              </Text>
-              <Text style={styles.heroSubtitle}>
-                Upload a PDF, transcribe it into MusicXML, and open a clean paginated score from any
-                device on your local setup.
-              </Text>
             </View>
 
             <View style={styles.quickActionsCard}>
-              <Text style={styles.quickActionsEyebrow}>Quick actions</Text>
-
               <Pressable style={styles.primaryAction} onPress={pickDocument}>
                 <View style={styles.primaryActionIcon}>
                   <FontAwesomeIcon icon={faUpload} size={18} color={COLORS.card} />
                 </View>
                 <View style={styles.primaryActionTextWrap}>
-                  <Text style={styles.primaryActionTitle}>Upload a PDF</Text>
-                  <Text style={styles.primaryActionSubtitle}>Start a new transcription</Text>
+                  <Text style={styles.primaryActionTitle}>Upload a PDF or MXL</Text>
                 </View>
               </Pressable>
 
@@ -457,9 +419,6 @@ export default function UploadScreen({ navigation }) {
             <View style={[styles.toolbarRow, !isTablet && styles.toolbarRowStack]}>
               <View style={styles.libraryTitleWrap}>
                 <Text style={styles.sectionTitle}>Library</Text>
-                <Text style={styles.sectionCopy}>
-                  Browse recent scores and reopen previous transcriptions.
-                </Text>
               </View>
 
               <View style={[styles.controlsWrap, !isTablet && styles.controlsWrapStack]}>
@@ -569,44 +528,6 @@ export default function UploadScreen({ navigation }) {
                 )}
               </View>
             </View>
-
-            <View style={styles.sidebarColumn}>
-              <View style={styles.statusCard}>
-                <View style={styles.statusHeader}>
-                  <View style={styles.statusHeaderLeft}>
-                    <View style={styles.statusIconBubble}>
-                      <FontAwesomeIcon
-                        icon={selectedFile ? faCheckCircle : faClock}
-                        size={16}
-                        color={selectedFile ? COLORS.success : COLORS.primary}
-                      />
-                    </View>
-                    <View style={styles.statusCopyWrap}>
-                      <Text style={styles.statusTitle}>Transcription status</Text>
-                      <Text style={styles.statusLabel} numberOfLines={1}>
-                        {selectedFile ? selectedFile.name : 'No file selected'}
-                      </Text>
-                    </View>
-                  </View>
-                  {isLoading ? <ActivityIndicator color={COLORS.primary} /> : null}
-                </View>
-
-                <Text style={styles.statusText}>{statusText}</Text>
-                {jobId ? <Text style={styles.jobText}>Job ID: {jobId}</Text> : null}
-              </View>
-
-              <View style={styles.infoCard}>
-                <Text style={styles.infoCardTitle}>Accepted input</Text>
-                <View style={styles.infoChip}>
-                  <FontAwesomeIcon icon={faMusic} size={12} color={COLORS.primary} />
-                  <Text style={styles.infoChipText}>PDF scores only</Text>
-                </View>
-                <Text style={styles.infoCardBody}>
-                  After upload, the app transcribes your score into MusicXML and builds clean
-                  paginated pages for playback.
-                </Text>
-              </View>
-            </View>
           </View>
         </View>
       </ScrollView>
@@ -661,14 +582,6 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
   },
 
-  quickActionsEyebrow: {
-    fontFamily: 'Afacad_400Regular',
-    fontSize: 16,
-    color: COLORS.muted,
-    marginBottom: 14,
-    textAlign: 'center',
-  },
-
   primaryAction: {
     backgroundColor: COLORS.primary,
     borderRadius: 22,
@@ -699,13 +612,6 @@ const styles = StyleSheet.create({
     color: COLORS.card,
   },
 
-  primaryActionSubtitle: {
-    fontFamily: 'Afacad_400Regular',
-    fontSize: 15,
-    color: '#EDE1D6',
-    marginTop: 2,
-  },
-
   secondaryAction: {
     borderWidth: 1,
     borderColor: COLORS.stroke,
@@ -729,26 +635,7 @@ const styles = StyleSheet.create({
     fontFamily: 'Afacad_400Regular',
     fontSize: 44,
     color: COLORS.primary,
-    marginBottom: 10,
-    textAlign: 'center',
-  },
-
-  heroTitle: {
-    fontFamily: 'Afacad_400Regular',
-    fontSize: 32,
-    lineHeight: 36,
-    color: COLORS.primary,
-    marginBottom: 10,
-    maxWidth: 760,
-    textAlign: 'center',
-  },
-
-  heroSubtitle: {
-    fontFamily: 'Afacad_400Regular',
-    fontSize: 18,
-    lineHeight: 25,
-    color: COLORS.muted,
-    maxWidth: 760,
+    marginBottom: 0,
     textAlign: 'center',
   },
 
@@ -785,12 +672,6 @@ const styles = StyleSheet.create({
     fontSize: 28,
     color: COLORS.primary,
     marginBottom: 4,
-  },
-
-  sectionCopy: {
-    fontFamily: 'Afacad_400Regular',
-    fontSize: 17,
-    color: COLORS.muted,
   },
 
   controlsWrap: {
@@ -872,7 +753,7 @@ const styles = StyleSheet.create({
   libraryColumn: {
     flex: 1,
     minWidth: 320,
-    maxWidth: 600,
+    maxWidth: 940,
   },
 
   sidebarColumn: {
