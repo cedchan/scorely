@@ -110,6 +110,8 @@ class ConnectionManager:
     def __init__(self):
         # {job_id: Set[WebSocket]}
         self.active_connections: Dict[str, Set[WebSocket]] = {}
+        # {job_id: {websocket: {'user_id': str, 'username': str}}}
+        self.user_info: Dict[str, Dict[WebSocket, dict]] = {}
 
     async def connect(self, websocket: WebSocket, job_id: str):
         """Connect a client to a job's annotation room"""
@@ -117,6 +119,7 @@ class ConnectionManager:
 
         if job_id not in self.active_connections:
             self.active_connections[job_id] = set()
+            self.user_info[job_id] = {}
 
         self.active_connections[job_id].add(websocket)
         logger.info(f"Client connected to job {job_id}. Total connections: {len(self.active_connections[job_id])}")
@@ -125,11 +128,21 @@ class ConnectionManager:
         """Disconnect a client from a job's annotation room"""
         if job_id in self.active_connections:
             self.active_connections[job_id].discard(websocket)
+
+            # Remove user info and get it for broadcasting
+            user_info = None
+            if job_id in self.user_info and websocket in self.user_info[job_id]:
+                user_info = self.user_info[job_id].pop(websocket)
+
             logger.info(f"Client disconnected from job {job_id}. Remaining: {len(self.active_connections[job_id])}")
 
             # Clean up empty rooms
             if not self.active_connections[job_id]:
                 del self.active_connections[job_id]
+                if job_id in self.user_info:
+                    del self.user_info[job_id]
+
+            return user_info
 
     async def broadcast(self, job_id: str, message: dict, exclude: Optional[WebSocket] = None):
         """Broadcast message to all clients in a job room"""
@@ -151,6 +164,24 @@ class ConnectionManager:
         # Clean up disconnected clients
         for connection in disconnected:
             self.disconnect(connection, job_id)
+
+    def add_user_info(self, websocket: WebSocket, job_id: str, user_id: str, username: str):
+        """Store user information for a websocket connection"""
+        if job_id not in self.user_info:
+            self.user_info[job_id] = {}
+        self.user_info[job_id][websocket] = {
+            'user_id': user_id,
+            'username': username
+        }
+
+    def get_present_users(self, job_id: str) -> list:
+        """Get list of all present users in a job room"""
+        if job_id not in self.user_info:
+            return []
+        return [
+            {'user_id': info['user_id'], 'username': info['username']}
+            for info in self.user_info[job_id].values()
+        ]
 
 
 connection_manager = ConnectionManager()
@@ -1358,7 +1389,33 @@ async def websocket_annotations(websocket: WebSocket, job_id: str):
             data = await websocket.receive_json()
             message_type = data.get("type")
 
-            if message_type == "annotation_added":
+            if message_type == "user_join":
+                # Client sending their user info
+                user_id = data.get("user_id")
+                username = data.get("username")
+                if user_id and username:
+                    connection_manager.add_user_info(websocket, job_id, user_id, username)
+                    logger.info(f"User {username} ({user_id}) joined job {job_id}")
+
+                    # Broadcast user_joined to other clients
+                    await connection_manager.broadcast(
+                        job_id,
+                        {
+                            "type": "user_joined",
+                            "user_id": user_id,
+                            "username": username
+                        },
+                        exclude=websocket
+                    )
+
+                    # Send presence update to the joining user
+                    present_users = connection_manager.get_present_users(job_id)
+                    await websocket.send_json({
+                        "type": "presence_update",
+                        "users": present_users
+                    })
+
+            elif message_type == "annotation_added":
                 # Client created a new annotation
                 ann_data = data.get("annotation")
                 if ann_data:
@@ -1465,11 +1522,31 @@ async def websocket_annotations(websocket: WebSocket, job_id: str):
                 })
 
     except WebSocketDisconnect:
-        connection_manager.disconnect(websocket, job_id)
+        user_info = connection_manager.disconnect(websocket, job_id)
         logger.info(f"WebSocket disconnected for job {job_id}")
+
+        # Broadcast user_left if we have user info
+        if user_info:
+            await connection_manager.broadcast(
+                job_id,
+                {
+                    "type": "user_left",
+                    "user_id": user_info['user_id']
+                }
+            )
     except Exception as e:
         logger.error(f"WebSocket error for job {job_id}: {e}")
-        connection_manager.disconnect(websocket, job_id)
+        user_info = connection_manager.disconnect(websocket, job_id)
+
+        # Broadcast user_left if we have user info
+        if user_info:
+            await connection_manager.broadcast(
+                job_id,
+                {
+                    "type": "user_left",
+                    "user_id": user_info['user_id']
+                }
+            )
 
 
 # --- SHARE CODE ENDPOINTS ---

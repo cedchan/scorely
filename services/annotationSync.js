@@ -27,6 +27,9 @@ class AnnotationSyncService {
       annotation_deleted: [],
       sync_response: [],
       title_updated: [],
+      user_joined: [],
+      user_left: [],
+      presence_update: [],
       error: [],
     };
   }
@@ -34,7 +37,7 @@ class AnnotationSyncService {
   /**
    * Connect to WebSocket server
    */
-  connect(apiBaseUrl, jobId, userId) {
+  connect(apiBaseUrl, jobId, userId, username = null) {
     if (this.ws && this.isConnected) {
       console.warn('Already connected to annotation sync');
       return;
@@ -43,6 +46,7 @@ class AnnotationSyncService {
     this.jobId = jobId;
     this.apiBaseUrl = apiBaseUrl;
     this.userId = userId;
+    this.username = username;
 
     // Construct WebSocket URL
     const wsProtocol = apiBaseUrl.startsWith('https') ? 'wss' : 'ws';
@@ -57,6 +61,16 @@ class AnnotationSyncService {
         console.log('Annotation sync connected');
         this.isConnected = true;
         this.reconnectAttempts = 0;
+
+        // Send join message with username
+        if (this.username) {
+          this.ws.send(JSON.stringify({
+            type: 'user_join',
+            user_id: this.userId,
+            username: this.username,
+          }));
+        }
+
         this._notifyListeners('connected', {});
       };
 
@@ -235,6 +249,28 @@ class AnnotationSyncService {
       case 'title_updated':
         this._notifyListeners('title_updated', {
           title: data.title,
+        });
+        break;
+
+      case 'user_joined':
+        console.log('[AnnotationSync] User joined event:', data);
+        this._notifyListeners('user_joined', {
+          userId: data.user_id,
+          username: data.username,
+        });
+        break;
+
+      case 'user_left':
+        console.log('[AnnotationSync] User left event:', data);
+        this._notifyListeners('user_left', {
+          userId: data.user_id,
+        });
+        break;
+
+      case 'presence_update':
+        console.log('[AnnotationSync] Presence update event:', data);
+        this._notifyListeners('presence_update', {
+          users: data.users || [],
         });
         break;
 

@@ -29,12 +29,14 @@ export default function AnnotationLayer({
   const normalizeWidth = imageWidth || width;
   const normalizeHeight = imageHeight || height;
   const [currentPathPoints, setCurrentPathPoints] = useState([]);
+  const [eraserPosition, setEraserPosition] = useState(null);
   const currentPathPointsRef = useRef([]);
   const annotationsToEraseRef = useRef([]);
   const tempAnnotationIdRef = useRef(null);
   const updateThrottleRef = useRef(null);
   const lastUpdateTimeRef = useRef(0);
   const pendingUpdateRef = useRef(null);
+  const eraserRadius = 20;
 
   // Keep ref updated with current points
   useEffect(() => {
@@ -153,6 +155,7 @@ export default function AnnotationLayer({
       } else if (currentTool === 'eraser') {
         // Start tracking annotations to erase
         annotationsToEraseRef.current = [];
+        setEraserPosition({ x: locationX, y: locationY });
         checkForAnnotationsToErase(locationX, locationY);
       }
     },
@@ -179,6 +182,7 @@ export default function AnnotationLayer({
         // Send throttled live update
         sendThrottledLiveUpdate(newPoints);
       } else if (currentTool === 'eraser') {
+        setEraserPosition({ x: locationX, y: locationY });
         checkForAnnotationsToErase(locationX, locationY);
       }
     },
@@ -218,6 +222,7 @@ export default function AnnotationLayer({
       } else if (currentTool === 'eraser') {
         // Annotations were already erased during the gesture
         annotationsToEraseRef.current = [];
+        setEraserPosition(null);
       }
     },
 
@@ -225,6 +230,7 @@ export default function AnnotationLayer({
       // Reset on gesture cancel
       setCurrentPathPoints([]);
       annotationsToEraseRef.current = [];
+      setEraserPosition(null);
     },
   }), [
     enabled,
@@ -354,6 +360,19 @@ export default function AnnotationLayer({
             fill="none"
             strokeLinecap="round"
             strokeLinejoin="round"
+          />
+        )}
+
+        {/* Render eraser cursor */}
+        {eraserPosition && currentTool === 'eraser' && (
+          <Circle
+            cx={eraserPosition.x}
+            cy={eraserPosition.y}
+            r={eraserRadius}
+            stroke={COLORS.darkBrown}
+            strokeWidth={2}
+            fill="none"
+            opacity={0.5}
           />
         )}
       </Svg>

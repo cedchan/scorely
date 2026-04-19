@@ -23,8 +23,10 @@ import {
   faUpload,
   faUserPlus,
 } from '@fortawesome/free-solid-svg-icons';
+import { faPenToSquare } from '@fortawesome/free-regular-svg-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import { getApiBaseUrl } from '../services/apiBaseUrl';
+import { initializeUserIdentity, setUsername } from '../services/userIdentity';
 
 const COLORS = {
   background: '#F7F1E8',
@@ -121,11 +123,20 @@ export default function UploadScreen({ navigation }) {
   const [latestProject, setLatestProject] = useState(null);
   const [viewMode, setViewMode] = useState('grid');
   const [searchQuery, setSearchQuery] = useState('');
+  const [username, setUsernameState] = useState('');
+  const [userId, setUserId] = useState('');
   const pollTimerRef = useRef(null);
 
   const [fontsLoaded] = useFonts({
     Afacad_400Regular,
   });
+
+  useEffect(() => {
+    initializeUserIdentity().then(({ userId, username }) => {
+      setUserId(userId);
+      setUsernameState(username);
+    });
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -175,6 +186,15 @@ export default function UploadScreen({ navigation }) {
       pageManifestPath: job.files.score_pages,
       fileName,
     });
+  };
+
+  const handleEditUsername = () => {
+    const newUsername = prompt('Enter a new username:', username);
+    if (newUsername && newUsername.trim()) {
+      setUsername(newUsername.trim()).then(() => {
+        setUsernameState(newUsername.trim());
+      });
+    }
   };
 
   const joinSharedScore = async () => {
@@ -396,6 +416,14 @@ export default function UploadScreen({ navigation }) {
           <View style={styles.topColumn}>
             <View style={styles.heroBlock}>
               <Text style={styles.brand}>Scorely</Text>
+              {username && (
+                <View style={styles.usernameContainer}>
+                  <Text style={styles.usernameText}>{username}</Text>
+                  <Pressable onPress={handleEditUsername} style={styles.usernameEditButton}>
+                    <FontAwesomeIcon icon={faPenToSquare} size={14} color={COLORS.muted} />
+                  </Pressable>
+                </View>
+              )}
             </View>
 
             <View style={styles.quickActionsCard}>
@@ -564,6 +592,32 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     paddingVertical: 8,
+    position: 'relative',
+  },
+
+  usernameContainer: {
+    position: 'absolute',
+    top: 8,
+    right: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: COLORS.card,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: COLORS.stroke,
+  },
+
+  usernameText: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 16,
+    color: COLORS.primary,
+  },
+
+  usernameEditButton: {
+    padding: 4,
   },
 
   quickActionsCard: {

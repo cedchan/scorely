@@ -23,11 +23,13 @@ import {
   faPause,
   faPlay,
   faShare,
+  faCopy,
 } from '@fortawesome/free-solid-svg-icons';
 import AnnotationLayer from '../components/AnnotationLayer';
 import AnnotationToolbar from '../components/AnnotationToolbar';
 import annotationSyncService from '../services/annotationSync';
 import { getApiBaseUrl } from '../services/apiBaseUrl';
+import { initializeUserIdentity } from '../services/userIdentity';
 import {
   FilesetResolver,
   FaceLandmarker
@@ -70,10 +72,14 @@ export default function PlayerScreen({ route, navigation }) {
   const [currentTool, setCurrentTool] = useState('pen');
   const [currentColor, setCurrentColor] = useState('#D94848');
   const [currentStrokeWidth, setCurrentStrokeWidth] = useState(4);
-  const [userId] = useState(
-    () => `user-${Math.random().toString(36).slice(2, 11)}`
-  );
+  const [userId, setUserId] = useState('');
+  const [username, setUsername] = useState('');
   const [shareCode, setShareCode] = useState(null);
+  const [presentUsers, setPresentUsers] = useState([
+    // Uncomment below to test presence UI:
+    // { user_id: 'test1', username: 'SwiftEagle42' },
+    // { user_id: 'test2', username: 'BraveTiger99' },
+  ]);
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const faceLandmarkerRef = useRef(null);
@@ -158,6 +164,14 @@ export default function PlayerScreen({ route, navigation }) {
   let [fontsLoaded] = useFonts({
     Afacad_400Regular,
   });
+
+  // Initialize user identity
+  useEffect(() => {
+    initializeUserIdentity().then(({ userId, username }) => {
+      setUserId(userId);
+      setUsername(username);
+    });
+  }, []);
 
   const normalizePageMeasureRegions = (pageList = []) => {
     let fallbackMeasureIndex = 0;
@@ -347,10 +361,10 @@ export default function PlayerScreen({ route, navigation }) {
 
   // Annotation WebSocket connection
   useEffect(() => {
-    if (!jobId) return;
+    if (!jobId || !userId || !username) return;
 
     // Connect to annotation sync
-    annotationSyncService.connect(apiBaseUrl, jobId, userId);
+    annotationSyncService.connect(apiBaseUrl, jobId, userId, username);
 
     // Set up event listeners
     const handleSyncResponse = ({ annotations: syncedAnnotations }) => {
@@ -389,11 +403,39 @@ export default function PlayerScreen({ route, navigation }) {
       setTitle(newTitle);
     };
 
+    const handlePresenceUpdate = ({ users }) => {
+      console.log('Presence update received:', users);
+      // Filter out current user
+      const otherUsers = users.filter(u => u.user_id !== userId);
+      console.log('Other users present:', otherUsers);
+      setPresentUsers(otherUsers);
+    };
+
+    const handleUserJoined = ({ userId: joinedUserId, username: joinedUsername }) => {
+      console.log('User joined:', joinedUserId, joinedUsername);
+      if (joinedUserId !== userId) {
+        setPresentUsers((prev) => {
+          if (prev.some(u => u.user_id === joinedUserId)) {
+            return prev;
+          }
+          return [...prev, { user_id: joinedUserId, username: joinedUsername }];
+        });
+      }
+    };
+
+    const handleUserLeft = ({ userId: leftUserId }) => {
+      console.log('User left:', leftUserId);
+      setPresentUsers((prev) => prev.filter(u => u.user_id !== leftUserId));
+    };
+
     annotationSyncService.on('sync_response', handleSyncResponse);
     annotationSyncService.on('annotation_added', handleAnnotationAdded);
     annotationSyncService.on('annotation_updated', handleAnnotationUpdated);
     annotationSyncService.on('annotation_deleted', handleAnnotationDeleted);
     annotationSyncService.on('title_updated', handleTitleUpdated);
+    annotationSyncService.on('presence_update', handlePresenceUpdate);
+    annotationSyncService.on('user_joined', handleUserJoined);
+    annotationSyncService.on('user_left', handleUserLeft);
     annotationSyncService.on('error', handleError);
 
     // Cleanup
@@ -403,10 +445,13 @@ export default function PlayerScreen({ route, navigation }) {
       annotationSyncService.off('annotation_updated', handleAnnotationUpdated);
       annotationSyncService.off('annotation_deleted', handleAnnotationDeleted);
       annotationSyncService.off('title_updated', handleTitleUpdated);
+      annotationSyncService.off('presence_update', handlePresenceUpdate);
+      annotationSyncService.off('user_joined', handleUserJoined);
+      annotationSyncService.off('user_left', handleUserLeft);
       annotationSyncService.off('error', handleError);
       annotationSyncService.disconnect();
     };
-  }, [apiBaseUrl, jobId, userId]);
+  }, [apiBaseUrl, jobId, userId, username]);
   useEffect(() => {
     console.log('camera effect running', { platform: Platform.OS, nodEnabled });
     if (Platform.OS !== 'web') return;
@@ -1046,28 +1091,43 @@ export default function PlayerScreen({ route, navigation }) {
     );
   };
 
-  const handleShare = async () => {
-    if (!jobId) {
-      alert('Cannot share: No job ID available');
-      return;
-    }
-
-    try {
-      const response = await fetch(`${apiBaseUrl}/api/share/${jobId}`, {
-        method: 'POST',
-      });
-      const data = await response.json();
-
-      if (response.ok) {
-        setShareCode(data.share_code);
-        if (Platform.OS === 'web') {
-          alert(`Share this code with friends:\n\n${data.share_code}\n\nThey can enter it on the home page to view this score together!`);
-        }
-      } else {
-        alert(`Failed to generate share code: ${data.detail || 'Unknown error'}`);
+  // Load share code on mount
+  useEffect(() => {
+    const loadShareCode = async () => {
+      if (!jobId) {
+        return;
       }
-    } catch (error) {
-      alert(`Error generating share code: ${error.message}`);
+
+      try {
+        const response = await fetch(`${apiBaseUrl}/api/share/${jobId}`, {
+          method: 'POST',
+        });
+        const data = await response.json();
+
+        if (response.ok) {
+          setShareCode(data.share_code);
+        }
+      } catch (error) {
+        console.error('Error loading share code:', error);
+      }
+    };
+
+    loadShareCode();
+  }, [apiBaseUrl, jobId]);
+
+  const copyShareCode = async () => {
+    if (!shareCode) return;
+
+    if (Platform.OS === 'web') {
+      try {
+        await navigator.clipboard.writeText(shareCode);
+        alert('Share code copied to clipboard!');
+      } catch (error) {
+        alert('Failed to copy to clipboard');
+      }
+    } else {
+      // For native platforms, you'd use Clipboard from @react-native-clipboard/clipboard
+      alert(`Share code: ${shareCode}`);
     }
   };
 
@@ -1186,25 +1246,43 @@ export default function PlayerScreen({ route, navigation }) {
           </TouchableOpacity>
         </View>
         <View style={styles.headerActions}>
-          <TouchableOpacity
-            style={[styles.compactPlayButton, !audioUrl && styles.compactPlayButtonDisabled]}
-            onPress={togglePlayback}
-            disabled={!audioUrl}
-          >
-            <FontAwesomeIcon
-              icon={isPlaying ? faPause : faPlay}
-              size={16}
-              color={COLORS.beige}
-            />
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.compactShareButton} onPress={handleShare}>
-            <FontAwesomeIcon icon={faShare} size={16} color={COLORS.darkBrown} />
-          </TouchableOpacity>
+          {presentUsers.length > 0 && (
+            <View style={styles.presenceContainer}>
+              {presentUsers.map((user) => (
+                <View key={user.user_id} style={styles.presenceAvatar}>
+                  <Text style={styles.presenceAvatarText}>
+                    {user.username?.charAt(0).toUpperCase() || '?'}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          )}
+          {shareCode && (
+            <View style={styles.shareCodeContainer}>
+              <Text style={styles.shareCodeLabel}>Share Code:</Text>
+              <Text style={styles.shareCodeText}>{shareCode}</Text>
+              <TouchableOpacity style={styles.copyButton} onPress={copyShareCode}>
+                <FontAwesomeIcon icon={faCopy} size={14} color={COLORS.darkBrown} />
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
       </View>
 
       {/* Annotation Toolbar */}
       <View style={styles.toolbarRow}>
+        <TouchableOpacity
+          style={[styles.compactPlayButton, !audioUrl && styles.compactPlayButtonDisabled]}
+          onPress={togglePlayback}
+          disabled={!audioUrl}
+        >
+          <FontAwesomeIcon
+            icon={isPlaying ? faPause : faPlay}
+            size={16}
+            color={COLORS.beige}
+          />
+        </TouchableOpacity>
+
         <AnnotationToolbar
           currentTool={currentTool}
           currentColor={currentColor}
@@ -1526,7 +1604,6 @@ const styles = StyleSheet.create({
   compactHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     backgroundColor: COLORS.lightBrown,
     paddingHorizontal: 16,
     paddingVertical: 24,
@@ -1543,13 +1620,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    flex: 1,
+    flexShrink: 1,
   },
   compactTitle: {
     fontFamily: 'Afacad_400Regular',
     fontSize: 18,
     color: COLORS.beige,
-    flex: 1,
+    flexShrink: 1,
   },
   editButton: {
     width: 32,
@@ -1563,6 +1640,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    marginLeft: 'auto',
   },
   compactPlayButton: {
     width: 36,
@@ -1582,6 +1660,51 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.beige,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  shareCodeContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.beige,
+    borderRadius: 18,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    gap: 6,
+  },
+  shareCodeLabel: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 14,
+    color: COLORS.lightBrown,
+  },
+  shareCodeText: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 16,
+    fontWeight: '600',
+    color: COLORS.darkBrown,
+    letterSpacing: 0.5,
+  },
+  copyButton: {
+    padding: 4,
+  },
+  presenceContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  presenceAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: COLORS.darkBrown,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: COLORS.beige,
+  },
+  presenceAvatarText: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 14,
+    fontWeight: '600',
+    color: COLORS.beige,
   },
   hiddenCameraVideo: {
     position: 'absolute',

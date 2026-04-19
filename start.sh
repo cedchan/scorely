@@ -59,13 +59,13 @@ wait_for_http() {
 }
 
 setup_certificates() {
-    echo "🔐 Checking SSL certificates..."
+    echo "🔐 Checking SSL certificates..." >&2
 
     # Check if mkcert is installed
     if ! command -v mkcert &> /dev/null; then
-        echo "⚠️  mkcert not found. Installing via Homebrew..."
+        echo "⚠️  mkcert not found. Installing via Homebrew..." >&2
         if ! command -v brew &> /dev/null; then
-            echo "❌ Homebrew is required but not installed. Please install from https://brew.sh"
+            echo "❌ Homebrew is required but not installed. Please install from https://brew.sh" >&2
             exit 1
         fi
         brew install mkcert
@@ -73,7 +73,7 @@ setup_certificates() {
 
     # Install local CA if not already done
     if ! mkcert -CAROOT &> /dev/null; then
-        echo "📜 Installing local Certificate Authority..."
+        echo "📜 Installing local Certificate Authority..." >&2
         mkcert -install
     fi
 
@@ -89,13 +89,13 @@ setup_certificates() {
     mkdir -p "${CERT_DIR}"
 
     if [[ ! -f "${CERT_DIR}/localhost+3.pem" ]] || ! grep -q "${LOCAL_IP}" "${CERT_DIR}/localhost+3.pem" 2>/dev/null; then
-        echo "🔑 Generating SSL certificates for localhost and ${LOCAL_IP}..."
+        echo "🔑 Generating SSL certificates for localhost and ${LOCAL_IP}..." >&2
         cd "${CERT_DIR}"
-        mkcert localhost 127.0.0.1 ::1 "${LOCAL_IP}"
+        mkcert localhost 127.0.0.1 ::1 "${LOCAL_IP}" >&2
         cd ..
-        echo "✅ Certificates generated!"
+        echo "✅ Certificates generated!" >&2
     else
-        echo "✅ Valid certificates found!"
+        echo "✅ Valid certificates found!" >&2
     fi
 
     echo "${LOCAL_IP}"
@@ -170,14 +170,28 @@ wait_for_http "http://localhost:8081" "Expo web app" 90
 echo ""
 echo "✅ Scorely is ready!"
 echo ""
-echo "   📱 Local (laptop):        http://localhost:8081"
-echo "   🔐 iPad (HTTPS):          https://${LOCAL_IP}"
-echo "   📚 API Docs:              https://${LOCAL_IP}/docs"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "📱 LOCAL ACCESS (on this computer)"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "   Web App:  http://localhost:8081"
+echo "   Backend:  https://localhost:8443"
+echo "   API Docs: https://localhost:8443/docs"
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "📱 LAN ACCESS (iPad/other devices on same WiFi)"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "   Web App:  https://${LOCAL_IP}"
+echo "   Backend:  https://${LOCAL_IP}:8443"
+echo "   API Docs: https://${LOCAL_IP}:8443/docs"
 echo ""
 echo "   💡 For iPad camera access:"
 echo "      • Open https://${LOCAL_IP} in Safari"
 echo "      • Accept certificate warning once"
 echo "      • Camera features will work!"
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 if [[ "${ENABLE_TUNNELS}" == "1" ]]; then
     echo ""
