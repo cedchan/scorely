@@ -1,4 +1,4 @@
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { StyleSheet, Text, TouchableOpacity, View, Switch } from 'react-native';
 import { FontAwesomeIcon } from '@fortawesome/react-native-fontawesome';
 import {
   faPen,
@@ -6,6 +6,9 @@ import {
   faFont,
   faTrash,
   faCircle,
+  faEye,
+  faChevronDown,
+  faChevronUp,
 } from '@fortawesome/free-solid-svg-icons';
 
 const COLORS = {
@@ -37,7 +40,51 @@ export default function AnnotationToolbar({
   onStrokeWidthChange,
   onClearAll,
   onToggleEnabled,
+  annotations = [],
+  currentUserId = '',
+  currentUsername = '',
+  presentUsers = [],
+  hiddenAnnotationUsers = new Set(),
+  showUserVisibilityDropdown = false,
+  onToggleDropdown = () => {},
+  onToggleUserVisibility = () => {},
 }) {
+
+  // Get all unique users who have made annotations
+  const usersWithAnnotations = Array.from(
+    new Set(annotations.map(ann => ann.user_id).filter(Boolean))
+  ).map(userId => {
+    const isCurrentUser = userId === currentUserId;
+    const user = presentUsers.find(u => u.user_id === userId);
+
+    // For current user, use currentUsername prop if not in presentUsers
+    let username = user?.username;
+    if (!username && isCurrentUser) {
+      username = currentUsername || 'Me';
+    } else if (!username) {
+      username = 'Unknown User';
+    }
+
+    return {
+      user_id: userId,
+      username: username,
+      isCurrentUser: isCurrentUser,
+    };
+  }).sort((a, b) => {
+    // Current user first, then alphabetically
+    if (a.isCurrentUser) return -1;
+    if (b.isCurrentUser) return 1;
+    return a.username.localeCompare(b.username);
+  });
+
+  // Debug logging
+  console.log('[AnnotationToolbar] Total annotations:', annotations.length);
+  if (annotations.length > 0) {
+    console.log('[AnnotationToolbar] First annotation:', annotations[0]);
+  }
+  console.log('[AnnotationToolbar] Users with annotations:', usersWithAnnotations);
+  console.log('[AnnotationToolbar] Current user ID:', currentUserId);
+  console.log('[AnnotationToolbar] Present users:', presentUsers);
   return (
     <View style={styles.container}>
       {/* Enable/Disable Toggle */}
@@ -142,6 +189,46 @@ export default function AnnotationToolbar({
           </TouchableOpacity>
         </>
       )}
+
+      {/* User Visibility Toggle - Always show */}
+      <View style={styles.visibilityContainer}>
+        <TouchableOpacity
+          style={styles.visibilityButton}
+          onPress={() => onToggleDropdown(!showUserVisibilityDropdown)}
+        >
+          <FontAwesomeIcon icon={faEye} size={16} color={COLORS.darkBrown} />
+          <Text style={styles.visibilityButtonText}>Users</Text>
+          <FontAwesomeIcon
+            icon={showUserVisibilityDropdown ? faChevronUp : faChevronDown}
+            size={12}
+            color={COLORS.darkBrown}
+          />
+        </TouchableOpacity>
+
+        {showUserVisibilityDropdown && (
+          <View style={styles.visibilityDropdown}>
+            {usersWithAnnotations.length > 0 ? (
+              usersWithAnnotations.map((user) => (
+                <View key={user.user_id} style={styles.visibilityRow}>
+                  <Text style={styles.visibilityUsername}>
+                    {user.username}{user.isCurrentUser ? ' (Me)' : ''}
+                  </Text>
+                  <Switch
+                    value={!hiddenAnnotationUsers.has(user.user_id)}
+                    onValueChange={() => onToggleUserVisibility(user.user_id)}
+                    trackColor={{ false: COLORS.lightBrown, true: COLORS.darkBrown }}
+                    thumbColor={COLORS.beige}
+                  />
+                </View>
+              ))
+            ) : (
+              <View style={styles.visibilityRow}>
+                <Text style={styles.visibilityEmptyText}>No annotations yet</Text>
+              </View>
+            )}
+          </View>
+        )}
+      </View>
     </View>
   );
 }
@@ -245,5 +332,58 @@ const styles = StyleSheet.create({
     fontFamily: 'Afacad_400Regular',
     fontSize: 14,
     color: COLORS.beige,
+  },
+  visibilityContainer: {
+    position: 'relative',
+    zIndex: 9999,
+  },
+  visibilityButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.beige,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    gap: 6,
+  },
+  visibilityButtonText: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 14,
+    color: COLORS.darkBrown,
+  },
+  visibilityDropdown: {
+    position: 'absolute',
+    top: 44,
+    right: 0,
+    backgroundColor: COLORS.beige,
+    borderRadius: 8,
+    paddingVertical: 8,
+    minWidth: 200,
+    zIndex: 9999,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 10,
+  },
+  visibilityRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    gap: 12,
+  },
+  visibilityUsername: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 14,
+    color: COLORS.darkBrown,
+    flex: 1,
+  },
+  visibilityEmptyText: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 14,
+    color: COLORS.lightBrown,
+    fontStyle: 'italic',
   },
 });

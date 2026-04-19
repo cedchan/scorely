@@ -80,6 +80,9 @@ export default function PlayerScreen({ route, navigation }) {
     // { user_id: 'test1', username: 'SwiftEagle42' },
     // { user_id: 'test2', username: 'BraveTiger99' },
   ]);
+  const [selectedPresenceUser, setSelectedPresenceUser] = useState(null);
+  const [hiddenAnnotationUsers, setHiddenAnnotationUsers] = useState(new Set());
+  const [showUserVisibilityDropdown, setShowUserVisibilityDropdown] = useState(false);
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const faceLandmarkerRef = useRef(null);
@@ -1191,7 +1194,21 @@ export default function PlayerScreen({ route, navigation }) {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView
+      style={styles.container}
+      onStartShouldSetResponder={() => {
+        let shouldCapture = false;
+        if (selectedPresenceUser) {
+          setSelectedPresenceUser(null);
+          shouldCapture = true;
+        }
+        if (showUserVisibilityDropdown) {
+          setShowUserVisibilityDropdown(false);
+          shouldCapture = true;
+        }
+        return shouldCapture;
+      }}
+    >
       {Platform.OS === 'web' ? (
         <video
           ref={videoRef}
@@ -1249,10 +1266,22 @@ export default function PlayerScreen({ route, navigation }) {
           {presentUsers.length > 0 && (
             <View style={styles.presenceContainer}>
               {presentUsers.map((user) => (
-                <View key={user.user_id} style={styles.presenceAvatar}>
-                  <Text style={styles.presenceAvatarText}>
-                    {user.username?.charAt(0).toUpperCase() || '?'}
-                  </Text>
+                <View key={user.user_id} style={styles.presenceWrapper}>
+                  <TouchableOpacity
+                    style={styles.presenceAvatar}
+                    onPress={() => setSelectedPresenceUser(
+                      selectedPresenceUser === user.user_id ? null : user.user_id
+                    )}
+                  >
+                    <Text style={styles.presenceAvatarText}>
+                      {user.username?.charAt(0).toUpperCase() || '?'}
+                    </Text>
+                  </TouchableOpacity>
+                  {selectedPresenceUser === user.user_id && (
+                    <View style={styles.presenceTooltip}>
+                      <Text style={styles.presenceTooltipText}>{user.username}</Text>
+                    </View>
+                  )}
                 </View>
               ))}
             </View>
@@ -1293,6 +1322,24 @@ export default function PlayerScreen({ route, navigation }) {
           onStrokeWidthChange={setCurrentStrokeWidth}
           onClearAll={handleClearAllAnnotations}
           onToggleEnabled={() => setAnnotationsEnabled(!annotationsEnabled)}
+          annotations={annotations}
+          currentUserId={userId}
+          currentUsername={username}
+          presentUsers={presentUsers}
+          hiddenAnnotationUsers={hiddenAnnotationUsers}
+          showUserVisibilityDropdown={showUserVisibilityDropdown}
+          onToggleDropdown={setShowUserVisibilityDropdown}
+          onToggleUserVisibility={(toggledUserId) => {
+            setHiddenAnnotationUsers((prev) => {
+              const next = new Set(prev);
+              if (next.has(toggledUserId)) {
+                next.delete(toggledUserId);
+              } else {
+                next.add(toggledUserId);
+              }
+              return next;
+            });
+          }}
         />
 
         <View style={styles.rightButtons}>
@@ -1542,6 +1589,9 @@ export default function PlayerScreen({ route, navigation }) {
                           onAnnotationCreated={handleAnnotationCreated}
                           onAnnotationUpdated={handleAnnotationUpdated}
                           enabled={annotationsEnabled && currentPage === item.page_number - 1}
+                          currentUserId={userId}
+                          presentUsers={presentUsers}
+                          hiddenAnnotationUsers={hiddenAnnotationUsers}
                         />
                       </View>
                     </>
@@ -1690,6 +1740,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
   },
+  presenceWrapper: {
+    position: 'relative',
+  },
   presenceAvatar: {
     width: 32,
     height: 32,
@@ -1705,6 +1758,25 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: COLORS.beige,
+  },
+  presenceTooltip: {
+    position: 'absolute',
+    top: 38,
+    left: '50%',
+    transform: 'translateX(-50%)',
+    backgroundColor: COLORS.darkBrown,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+    zIndex: 1000,
+    minWidth: 80,
+    alignItems: 'center',
+  },
+  presenceTooltipText: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 13,
+    color: COLORS.beige,
+    whiteSpace: 'nowrap',
   },
   hiddenCameraVideo: {
     position: 'absolute',
@@ -1851,6 +1923,8 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     marginBottom: 10,
     backgroundColor: COLORS.lightBrown,
+    zIndex: 10000,
+    position: 'relative',
   },
   cameraStatusRow: {
     paddingHorizontal: 20,

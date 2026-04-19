@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useMemo } from 'react';
+import React, { useEffect, useRef, useState, useMemo } from 'react';
 import { PanResponder, StyleSheet, View } from 'react-native';
 import Svg, { Path, Circle, Rect, Text as SvgText } from 'react-native-svg';
 
@@ -24,6 +24,9 @@ export default function AnnotationLayer({
   onAnnotationUpdated,
   enabled = true,
   style,
+  currentUserId = '',
+  presentUsers = [],
+  hiddenAnnotationUsers = new Set(),
 }) {
   // Use image dimensions for coordinate normalization, container dimensions for drawing area
   const normalizeWidth = imageWidth || width;
@@ -51,7 +54,7 @@ export default function AnnotationLayer({
       job_id: '',
       page_number: pageNumber,
       type: 'path',
-      user_id: '',
+      user_id: currentUserId,
       timestamp: Date.now() / 1000,
       path: {
         points,
@@ -203,7 +206,7 @@ export default function AnnotationLayer({
           job_id: '', // Will be set by parent
           page_number: pageNumber,
           type: 'path',
-          user_id: '', // Will be set by parent
+          user_id: currentUserId,
           timestamp: Date.now() / 1000,
           path: {
             points: currentPathPointsRef.current,
@@ -264,10 +267,18 @@ export default function AnnotationLayer({
     return pathString;
   };
 
-  // Filter annotations for current page
-  const pageAnnotations = annotations.filter(
-    (ann) => ann.page_number === pageNumber
-  );
+  // Filter annotations for current page and visible users
+  const pageAnnotations = annotations.filter((ann) => {
+    if (ann.page_number !== pageNumber) return false;
+    if (hiddenAnnotationUsers.has(ann.user_id)) return false;
+    return true;
+  });
+
+  // Get username for a user_id
+  const getUsernameById = (userId) => {
+    const user = presentUsers.find(u => u.user_id === userId);
+    return user?.username || 'Unknown';
+  };
 
   return (
     <View
@@ -280,17 +291,49 @@ export default function AnnotationLayer({
         {pageAnnotations.map((annotation) => {
           if (annotation.type === 'path' && annotation.path) {
             const pathString = pointsToPathString(annotation.path.points);
+            const isRemote = annotation.user_id && annotation.user_id !== currentUserId;
+            const isTemp = annotation._isTemp;
+            const showLabel = isRemote && isTemp && annotation.path.points.length > 0;
+
+            // Get the last point for the label position
+            const lastPoint = annotation.path.points[annotation.path.points.length - 1];
+            const labelX = showLabel ? (lastPoint.x / 100) * normalizeWidth + imageOffsetX : 0;
+            const labelY = showLabel ? (lastPoint.y / 100) * normalizeHeight + imageOffsetY : 0;
+
             return (
-              <Path
-                key={annotation.id}
-                d={pathString}
-                stroke={annotation.path.color}
-                strokeWidth={annotation.path.strokeWidth}
-                opacity={annotation.path.opacity}
-                fill="none"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
+              <React.Fragment key={annotation.id}>
+                <Path
+                  d={pathString}
+                  stroke={annotation.path.color}
+                  strokeWidth={annotation.path.strokeWidth}
+                  opacity={annotation.path.opacity}
+                  fill="none"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                {showLabel && (
+                  <>
+                    <Rect
+                      x={labelX - 40}
+                      y={labelY - 25}
+                      width={80}
+                      height={20}
+                      rx={4}
+                      fill={COLORS.darkBrown}
+                    />
+                    <SvgText
+                      x={labelX}
+                      y={labelY - 11}
+                      fontSize={12}
+                      fill={COLORS.beige}
+                      fontFamily="Afacad_400Regular"
+                      textAnchor="middle"
+                    >
+                      {getUsernameById(annotation.user_id)}
+                    </SvgText>
+                  </>
+                )}
+              </React.Fragment>
             );
           }
 

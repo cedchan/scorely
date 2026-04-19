@@ -27,10 +27,15 @@ const getWebApiBaseUrl = () => {
     // This allows single certificate acceptance
     const protocol = window.location.protocol;
     if (protocol === 'https:') {
+      // If on standard HTTPS port (443), use hostname only, otherwise use 8443
+      const port = window.location.port;
+      if (port && port !== '443') {
+        return `${protocol}//${window.location.hostname}`;
+      }
       return `${protocol}//${window.location.hostname}`;
     }
-    // Fallback to direct API port for HTTP access
-    return `${protocol}//${window.location.hostname}:8443`;
+    // For HTTP access (dev), use HTTPS API port
+    return `https://${window.location.hostname}:8443`;
   }
 
   return DEFAULT_API_BASE_URL;
