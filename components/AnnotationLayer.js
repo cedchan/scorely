@@ -200,7 +200,7 @@ export default function AnnotationLayer({
           updateThrottleRef.current = null;
         }
 
-        // Create final annotation with the temporary ID (will replace temporary one)
+        // Send final version as an update (since temp versions already exist)
         const annotation = {
           id: tempAnnotationIdRef.current,
           job_id: '', // Will be set by parent
@@ -217,7 +217,9 @@ export default function AnnotationLayer({
           _isFinal: true, // Flag to indicate this is the final version
         };
 
-        onAnnotationCreated(annotation);
+        // Use onAnnotationUpdated for final version to preserve the annotation
+        // and signal that drawing is complete
+        onAnnotationUpdated(annotation);
 
         // Clear current path
         setCurrentPathPoints([]);
@@ -280,12 +282,68 @@ export default function AnnotationLayer({
     return user?.username || 'Unknown';
   };
 
-  // Find remote temp annotations for username labels
+  // Track which annotations are actively being drawn (received updates recently)
+  const activeDrawingRef = useRef(new Map()); // Map<annotationId, lastUpdateTime>
+  const [, forceRender] = useState(0);
+
+  useEffect(() => {
+    const now = Date.now();
+
+    // Log all remote annotations and their _isTemp status
+    const remoteAnnotations = pageAnnotations.filter(a =>
+      a.type === 'path' && a.user_id !== currentUserId
+    );
+
+    if (remoteAnnotations.length > 0) {
+      console.log('[AnnotationLayer] Remote annotations details:');
+      remoteAnnotations.forEach((a, idx) => {
+        console.log(`  [${idx}] id=${a.id}, _isTemp=${a._isTemp}, _isFinal=${a._isFinal}, hasFlag=${a.hasOwnProperty('_isTemp')}, points=${a.path?.points?.length}`);
+        console.log(`       Full keys:`, Object.keys(a));
+      });
+    }
+
+    // Update timestamps for annotations with _isTemp flag
+    pageAnnotations.forEach((annotation) => {
+      if (annotation.type === 'path' &&
+          annotation.user_id !== currentUserId &&
+          annotation._isTemp === true) {
+        console.log('Setting active drawing timestamp for:', annotation.id);
+        activeDrawingRef.current.set(annotation.id, now);
+      }
+    });
+
+    console.log('Active drawing map:', Array.from(activeDrawingRef.current.keys()));
+
+    // Clean up annotations that haven't been updated in 500ms
+    const timeout = setTimeout(() => {
+      const cleanupTime = Date.now();
+      let hasChanges = false;
+
+      activeDrawingRef.current.forEach((timestamp, id) => {
+        if (cleanupTime - timestamp > 500) {
+          console.log('Removing from active drawing:', id);
+          activeDrawingRef.current.delete(id);
+          hasChanges = true;
+        }
+      });
+
+      if (hasChanges) {
+        forceRender(prev => prev + 1);
+      }
+    }, 500);
+
+    return () => clearTimeout(timeout);
+  }, [pageAnnotations, currentUserId]);
+
+  // Find remote temp annotations - only show while actively drawing
   const remoteTempAnnotations = pageAnnotations.filter((annotation) => {
     if (annotation.type !== 'path' || !annotation.path) return false;
-    const isRemote = annotation.user_id && annotation.user_id !== currentUserId;
-    const isTemp = annotation._isTemp;
-    return isRemote && isTemp && annotation.path.points.length > 0;
+    if (annotation.user_id === currentUserId) return false;
+
+    const hasPoints = annotation.path.points && annotation.path.points.length > 0;
+    const isActivelyDrawing = activeDrawingRef.current.has(annotation.id);
+
+    return hasPoints && isActivelyDrawing;
   });
 
   return (
@@ -409,8 +467,8 @@ export default function AnnotationLayer({
             style={[
               styles.usernameLabel,
               {
-                left: labelX - 40,
-                top: labelY - 30,
+                left: labelX + 10,
+                top: labelY - 25,
               },
             ]}
             pointerEvents="none"
@@ -429,6 +487,7 @@ const styles = StyleSheet.create({
   container: {
     position: 'absolute',
     zIndex: 100000,
+    overflow: 'visible',
   },
   svg: {
     position: 'absolute',
@@ -442,9 +501,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 4,
-    zIndex: 999999,
-    minWidth: 80,
-    alignItems: 'center',
+    zIndex: 2,
     elevation: 999,
   },
   usernameLabelText: {

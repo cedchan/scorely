@@ -1446,7 +1446,7 @@ async def websocket_annotations(websocket: WebSocket, job_id: str):
                     try:
                         # Check if this is a temporary live update
                         is_temp = ann_data.pop("_isTemp", False)
-                        ann_data.pop("_isFinal", False)  # Remove flag if present
+                        is_final = ann_data.pop("_isFinal", False)
 
                         if is_temp:
                             # Don't persist temporary updates, just broadcast them
@@ -1454,22 +1454,31 @@ async def websocket_annotations(websocket: WebSocket, job_id: str):
                                 job_id,
                                 {
                                     "type": "annotation_updated",
-                                    "annotation": ann_data
+                                    "annotation": {**ann_data, "_isTemp": True}
                                 },
                                 exclude=websocket
                             )
                         else:
                             # Regular or final update - persist to store
                             annotation = Annotation(**ann_data)
+
+                            # Try to update first, if it doesn't exist and is final, create it
                             updated_ann = annotation_store.update(annotation)
+                            if not updated_ann and is_final:
+                                # Annotation doesn't exist yet (was only sent as temp), create it now
+                                updated_ann = annotation_store.create(annotation)
 
                             if updated_ann:
-                                # Broadcast to other clients
+                                # Broadcast to other clients with _isFinal flag if applicable
+                                broadcast_data = updated_ann.model_dump()
+                                if is_final:
+                                    broadcast_data["_isFinal"] = True
+
                                 await connection_manager.broadcast(
                                     job_id,
                                     {
                                         "type": "annotation_updated",
-                                        "annotation": updated_ann.model_dump()
+                                        "annotation": broadcast_data
                                     },
                                     exclude=websocket
                                 )

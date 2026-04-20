@@ -19,6 +19,8 @@ import {
   faArrowLeft,
   faBackward,
   faChevronDown,
+  faChevronLeft,
+  faChevronRight,
   faCopy,
   faEdit,
   faForward,
@@ -63,6 +65,10 @@ export default function PlayerScreen({ route, navigation }) {
   const [activeMeasureIndex, setActiveMeasureIndex] = useState(null);
   const [pageTurnMode, setPageTurnMode] = useState('manual');
   const [showPageTurnMenu, setShowPageTurnMenu] = useState(false);
+  const [backwardMotion, setBackwardMotion] = useState('manual');
+  const [forwardMotion, setForwardMotion] = useState('manual');
+  const [showBackwardMenu, setShowBackwardMenu] = useState(false);
+  const [showForwardMenu, setShowForwardMenu] = useState(false);
   const [annotations, setAnnotations] = useState([]);
   const [annotationsEnabled, setAnnotationsEnabled] = useState(false);
   const [currentTool, setCurrentTool] = useState('pen');
@@ -96,7 +102,7 @@ export default function PlayerScreen({ route, navigation }) {
   const pageHorizontalPadding = isTabletLayout ? 56 : 20;
   const pageVerticalPadding = isTabletLayout ? 24 : 16;
   const pageTopPadding = isTabletLayout ? 32 : 24;
-  const controlsHeight = isTabletLayout ? 108 : 94;
+  const controlsHeight = isTabletLayout ? 70 : 60;
   const compactHeaderHeight = 56;
   const toolbarHeight = 58;
   const availablePageHeight = Math.max(
@@ -376,12 +382,65 @@ export default function PlayerScreen({ route, navigation }) {
     };
 
     const handleAnnotationUpdated = ({ annotation }) => {
+      console.log('[PlayerScreen] handleAnnotationUpdated called with:', {
+        id: annotation.id,
+        _isTemp: annotation._isTemp,
+        _isFinal: annotation._isFinal,
+        user_id: annotation.user_id,
+      });
+
       setAnnotations((prev) => {
         const exists = prev.some((a) => a.id === annotation.id);
+
+        // Only keep _isTemp flag if explicitly set to true
+        const isTemp = annotation._isTemp === true;
+        const isFinal = annotation._isFinal === true;
+
+        console.log('[PlayerScreen] Processing annotation:', {
+          id: annotation.id,
+          exists,
+          isTemp,
+          isFinal,
+        });
+
         if (exists) {
-          return prev.map((a) => (a.id === annotation.id ? annotation : a));
+          const updated = prev.map((a) => {
+            if (a.id === annotation.id) {
+              if (isFinal) {
+                // Final version, remove temp flags
+                const { _isTemp, _isFinal, ...finalAnnotation } = annotation;
+                console.log('[PlayerScreen] Finalizing annotation:', annotation.id);
+                return finalAnnotation;
+              } else if (isTemp) {
+                // Live update, keep temp flag
+                console.log('[PlayerScreen] Keeping temp flag for:', annotation.id);
+                return { ...annotation, _isTemp: true };
+              } else {
+                // No special flags, just update normally (removes _isTemp)
+                const { _isTemp: removedTemp, ...cleanAnnotation } = annotation;
+                console.log('[PlayerScreen] Removing temp flag from:', annotation.id);
+                return cleanAnnotation;
+              }
+            }
+            return a;
+          });
+          console.log('[PlayerScreen] After update, annotation state:', updated.find(a => a.id === annotation.id));
+          return updated;
         }
-        return [...prev, annotation];
+
+        // New annotation
+        if (isFinal) {
+          const { _isTemp, _isFinal, ...finalAnnotation } = annotation;
+          console.log('[PlayerScreen] Adding new final annotation:', annotation.id);
+          return [...prev, finalAnnotation];
+        } else if (isTemp) {
+          console.log('[PlayerScreen] Adding new temp annotation:', annotation.id);
+          return [...prev, { ...annotation, _isTemp: true }];
+        } else {
+          // New annotation without flags - don't add _isTemp
+          console.log('[PlayerScreen] Adding new annotation without flags:', annotation.id);
+          return [...prev, annotation];
+        }
       });
     };
 
@@ -1078,6 +1137,25 @@ export default function PlayerScreen({ route, navigation }) {
     }
   };
 
+  const getMotionLabel = (motionType) => {
+    switch (motionType) {
+      case 'nod':
+        return 'Nod';
+      case 'turn_left':
+        return 'Turn Left';
+      case 'turn_right':
+        return 'Turn Right';
+      case 'tilt_left':
+        return 'Tilt Left';
+      case 'tilt_right':
+        return 'Tilt Right';
+      case 'open_mouth':
+        return 'Open Mouth';
+      default:
+        return 'Manual';
+    }
+  };
+
   if (!fontsLoaded) {
     return null;
   }
@@ -1121,6 +1199,14 @@ export default function PlayerScreen({ route, navigation }) {
         }
         if (showPageTurnMenu) {
           setShowPageTurnMenu(false);
+          shouldCapture = true;
+        }
+        if (showBackwardMenu) {
+          setShowBackwardMenu(false);
+          shouldCapture = true;
+        }
+        if (showForwardMenu) {
+          setShowForwardMenu(false);
           shouldCapture = true;
         }
         return shouldCapture;
@@ -1179,8 +1265,8 @@ export default function PlayerScreen({ route, navigation }) {
           <Text style={styles.compactTitle} numberOfLines={1}>
             {title}
           </Text>
-          <TouchableOpacity onPress={handleRename} style={styles.editButton}>
-            <FontAwesomeIcon icon={faEdit} size={16} color={COLORS.darkBrown} />
+          <TouchableOpacity onPress={handleRename} style={styles.editButtonNoBg}>
+            <FontAwesomeIcon icon={faEdit} size={16} color={COLORS.beige} />
           </TouchableOpacity>
         </View>
         <View style={styles.headerActions}>
@@ -1221,116 +1307,218 @@ export default function PlayerScreen({ route, navigation }) {
         </View>
       </View>
 
-      <View style={styles.toolbarRow}>
-        <TouchableOpacity
-          style={[styles.compactPlayButton, !audioUrl && styles.compactPlayButtonDisabled]}
-          onPress={togglePlayback}
-          disabled={!audioUrl}
-        >
-          <FontAwesomeIcon
-            icon={isPlaying ? faPause : faPlay}
-            size={16}
-            color={COLORS.beige}
-          />
-        </TouchableOpacity>
+      <View style={styles.headerSeparator} />
 
-        <AnnotationToolbar
-          currentTool={currentTool}
-          currentColor={currentColor}
-          currentStrokeWidth={currentStrokeWidth}
-          enabled={annotationsEnabled}
-          onToolChange={setCurrentTool}
-          onColorChange={setCurrentColor}
-          onStrokeWidthChange={setCurrentStrokeWidth}
-          onClearAll={handleClearAllAnnotations}
-          onToggleEnabled={() => setAnnotationsEnabled(!annotationsEnabled)}
-          annotations={annotations}
-          currentUserId={userId}
-          currentUsername={username}
-          presentUsers={presentUsers}
-          hiddenAnnotationUsers={hiddenAnnotationUsers}
-          showUserVisibilityDropdown={showUserVisibilityDropdown}
-          onToggleDropdown={setShowUserVisibilityDropdown}
-          onToggleUserVisibility={(toggledUserId) => {
-            setHiddenAnnotationUsers((prev) => {
-              const next = new Set(prev);
-              if (next.has(toggledUserId)) {
-                next.delete(toggledUserId);
-              } else {
-                next.add(toggledUserId);
-              }
-              return next;
-            });
-          }}
-        />
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.toolbarScrollView}
+        contentContainerStyle={styles.toolbarScrollContent}
+      >
+        <View style={styles.toolbarRow}>
+          <TouchableOpacity
+            style={[styles.compactPlayButton, !audioUrl && styles.compactPlayButtonDisabled]}
+            onPress={togglePlayback}
+            disabled={!audioUrl}
+          >
+            <FontAwesomeIcon
+              icon={isPlaying ? faPause : faPlay}
+              size={16}
+              color={COLORS.beige}
+            />
+          </TouchableOpacity>
 
-        <View style={styles.rightButtons}>
-          <View style={styles.pageTurnMenuWrapper}>
+          {/* Backward Motion */}
+          <View style={styles.motionMenuWrapper}>
             <TouchableOpacity
-              style={[
-                styles.gestureButton,
-                pageTurnMode !== 'manual' && styles.gestureButtonActive,
-              ]}
-              onPress={() => setShowPageTurnMenu((prev) => !prev)}
+              style={styles.motionButton}
+              onPress={() => setShowBackwardMenu((prev) => !prev)}
             >
-              <Text
-                style={[
-                  styles.gestureButtonText,
-                  pageTurnMode !== 'manual' && styles.gestureButtonTextActive,
-                ]}
-              >
-                {getPageTurnLabel()}
-              </Text>
-              <View style={styles.pageTurnChevron}>
-                <FontAwesomeIcon
-                  icon={faChevronDown}
-                  size={12}
-                  color={pageTurnMode !== 'manual' ? COLORS.beige : COLORS.darkBrown}
-                />
-              </View>
+              <FontAwesomeIcon icon={faChevronLeft} size={14} color={COLORS.darkBrown} />
+              <Text style={styles.motionButtonText}>{getMotionLabel(backwardMotion)}</Text>
+              <FontAwesomeIcon icon={faChevronDown} size={10} color={COLORS.darkBrown} />
             </TouchableOpacity>
 
-            {showPageTurnMenu ? (
-              <View style={styles.pageTurnDropdown}>
+            {showBackwardMenu && (
+              <View style={styles.motionDropdown}>
                 <TouchableOpacity
-                  style={styles.pageTurnDropdownItem}
-                  onPress={() => handleSelectPageTurnMode('manual')}
-                >
-                  <Text style={styles.pageTurnDropdownText}>Manual only</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.pageTurnDropdownItem}
+                  style={styles.motionDropdownItem}
                   onPress={() => {
-                    if (Platform.OS !== 'web') {
-                      setCameraError(
-                        'Nod detection currently uses the web camera pipeline. Open the score in Safari over HTTPS on iPad to use the front camera.'
-                      );
-                    }
-                    handleSelectPageTurnMode('nod');
+                    setBackwardMotion('manual');
+                    setShowBackwardMenu(false);
                   }}
                 >
-                  <Text style={styles.pageTurnDropdownText}>Nod</Text>
+                  <Text style={styles.motionDropdownText}>Manual</Text>
                 </TouchableOpacity>
-
                 <TouchableOpacity
-                  style={styles.pageTurnDropdownItem}
-                  onPress={() => handleSelectPageTurnMode('tap')}
+                  style={styles.motionDropdownItem}
+                  onPress={() => {
+                    setBackwardMotion('nod');
+                    setShowBackwardMenu(false);
+                  }}
                 >
-                  <Text style={styles.pageTurnDropdownText}>Tap page edges</Text>
+                  <Text style={styles.motionDropdownText}>Nod</Text>
                 </TouchableOpacity>
-
                 <TouchableOpacity
-                  style={styles.pageTurnDropdownItem}
-                  onPress={() => handleSelectPageTurnMode('auto')}
+                  style={styles.motionDropdownItem}
+                  onPress={() => {
+                    setBackwardMotion('turn_left');
+                    setShowBackwardMenu(false);
+                  }}
                 >
-                  <Text style={styles.pageTurnDropdownText}>Auto during playback</Text>
+                  <Text style={styles.motionDropdownText}>Turn Left</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.motionDropdownItem}
+                  onPress={() => {
+                    setBackwardMotion('turn_right');
+                    setShowBackwardMenu(false);
+                  }}
+                >
+                  <Text style={styles.motionDropdownText}>Turn Right</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.motionDropdownItem}
+                  onPress={() => {
+                    setBackwardMotion('tilt_left');
+                    setShowBackwardMenu(false);
+                  }}
+                >
+                  <Text style={styles.motionDropdownText}>Tilt Left</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.motionDropdownItem}
+                  onPress={() => {
+                    setBackwardMotion('tilt_right');
+                    setShowBackwardMenu(false);
+                  }}
+                >
+                  <Text style={styles.motionDropdownText}>Tilt Right</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.motionDropdownItem}
+                  onPress={() => {
+                    setBackwardMotion('open_mouth');
+                    setShowBackwardMenu(false);
+                  }}
+                >
+                  <Text style={styles.motionDropdownText}>Open Mouth</Text>
                 </TouchableOpacity>
               </View>
-            ) : null}
+            )}
           </View>
+
+          {/* Forward Motion */}
+          <View style={styles.motionMenuWrapper}>
+            <TouchableOpacity
+              style={styles.motionButton}
+              onPress={() => setShowForwardMenu((prev) => !prev)}
+            >
+              <FontAwesomeIcon icon={faChevronRight} size={14} color={COLORS.darkBrown} />
+              <Text style={styles.motionButtonText}>{getMotionLabel(forwardMotion)}</Text>
+              <FontAwesomeIcon icon={faChevronDown} size={10} color={COLORS.darkBrown} />
+            </TouchableOpacity>
+
+            {showForwardMenu && (
+              <View style={styles.motionDropdown}>
+                <TouchableOpacity
+                  style={styles.motionDropdownItem}
+                  onPress={() => {
+                    setForwardMotion('manual');
+                    setShowForwardMenu(false);
+                  }}
+                >
+                  <Text style={styles.motionDropdownText}>Manual</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.motionDropdownItem}
+                  onPress={() => {
+                    setForwardMotion('nod');
+                    setShowForwardMenu(false);
+                  }}
+                >
+                  <Text style={styles.motionDropdownText}>Nod</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.motionDropdownItem}
+                  onPress={() => {
+                    setForwardMotion('turn_left');
+                    setShowForwardMenu(false);
+                  }}
+                >
+                  <Text style={styles.motionDropdownText}>Turn Left</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.motionDropdownItem}
+                  onPress={() => {
+                    setForwardMotion('turn_right');
+                    setShowForwardMenu(false);
+                  }}
+                >
+                  <Text style={styles.motionDropdownText}>Turn Right</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.motionDropdownItem}
+                  onPress={() => {
+                    setForwardMotion('tilt_left');
+                    setShowForwardMenu(false);
+                  }}
+                >
+                  <Text style={styles.motionDropdownText}>Tilt Left</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.motionDropdownItem}
+                  onPress={() => {
+                    setForwardMotion('tilt_right');
+                    setShowForwardMenu(false);
+                  }}
+                >
+                  <Text style={styles.motionDropdownText}>Tilt Right</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.motionDropdownItem}
+                  onPress={() => {
+                    setForwardMotion('open_mouth');
+                    setShowForwardMenu(false);
+                  }}
+                >
+                  <Text style={styles.motionDropdownText}>Open Mouth</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+
+          <AnnotationToolbar
+            currentTool={currentTool}
+            currentColor={currentColor}
+            currentStrokeWidth={currentStrokeWidth}
+            enabled={annotationsEnabled}
+            onToolChange={setCurrentTool}
+            onColorChange={setCurrentColor}
+            onStrokeWidthChange={setCurrentStrokeWidth}
+            onClearAll={handleClearAllAnnotations}
+            onToggleEnabled={() => setAnnotationsEnabled(!annotationsEnabled)}
+            annotations={annotations}
+            currentUserId={userId}
+            currentUsername={username}
+            presentUsers={presentUsers}
+            hiddenAnnotationUsers={hiddenAnnotationUsers}
+            showUserVisibilityDropdown={showUserVisibilityDropdown}
+            onToggleDropdown={setShowUserVisibilityDropdown}
+            onToggleUserVisibility={(toggledUserId) => {
+              setHiddenAnnotationUsers((prev) => {
+                const next = new Set(prev);
+                if (next.has(toggledUserId)) {
+                  next.delete(toggledUserId);
+                } else {
+                  next.add(toggledUserId);
+                }
+                return next;
+              });
+            }}
+          />
         </View>
-      </View>
+      </ScrollView>
 
       {(audioError ||
         cameraError ||
@@ -1604,7 +1792,7 @@ export default function PlayerScreen({ route, navigation }) {
           disabled={currentPage === 0}
           onPress={() => goToPage(currentPage - 1)}
         >
-          <FontAwesomeIcon icon={faBackward} size={26} color={COLORS.darkBrown} />
+          <FontAwesomeIcon icon={faBackward} size={20} color={COLORS.darkBrown} />
         </TouchableOpacity>
 
         <View style={styles.pageInfo}>
@@ -1622,7 +1810,7 @@ export default function PlayerScreen({ route, navigation }) {
           disabled={currentPage >= pages.length - 1}
           onPress={() => goToPage(currentPage + 1)}
         >
-          <FontAwesomeIcon icon={faForward} size={26} color={COLORS.darkBrown} />
+          <FontAwesomeIcon icon={faForward} size={20} color={COLORS.darkBrown} />
         </TouchableOpacity>
       </View>
     </SafeAreaView>
@@ -1642,6 +1830,8 @@ const styles = StyleSheet.create({
     paddingVertical: 24,
     height: 72,
     gap: 12,
+    overflow: 'visible',
+    zIndex: 10000,
   },
   backButton: {
     width: 32,
@@ -1652,7 +1842,7 @@ const styles = StyleSheet.create({
   titleSection: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 12,
     flexShrink: 1,
   },
   compactTitle: {
@@ -1669,11 +1859,23 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  editButtonNoBg: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   headerActions: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
     marginLeft: 'auto',
+    overflow: 'visible',
+  },
+  headerSeparator: {
+    height: 1,
+    backgroundColor: COLORS.darkBrown,
+    opacity: 0.15,
   },
   compactPlayButton: {
     width: 36,
@@ -1714,9 +1916,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
+    overflow: 'visible',
   },
   presenceWrapper: {
     position: 'relative',
+    zIndex: 1000,
   },
   presenceAvatar: {
     width: 32,
@@ -1738,14 +1942,14 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 38,
     left: '50%',
+    transform: [{ translateX: '-50%' }],
     backgroundColor: COLORS.darkBrown,
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 6,
-    zIndex: 1000,
-    minWidth: 80,
+    zIndex: 999999,
     alignItems: 'center',
-    transform: [{ translateX: -40 }],
+    elevation: 999,
   },
   presenceTooltipText: {
     fontFamily: 'Afacad_400Regular',
@@ -1782,13 +1986,14 @@ const styles = StyleSheet.create({
   pageWrapper: {
     flex: 1,
     justifyContent: 'center',
+    overflow: 'visible',
   },
   pageCard: {
     position: 'relative',
     flex: 1,
     backgroundColor: '#FFFDF8',
     borderRadius: 16,
-    overflow: 'hidden',
+    overflow: 'visible',
     borderWidth: 1,
     borderColor: '#E2D6C8',
     justifyContent: 'flex-start',
@@ -1815,6 +2020,7 @@ const styles = StyleSheet.create({
     position: 'relative',
     width: '100%',
     flex: 1,
+    overflow: 'visible',
   },
   measureHitAreaLayer: {
     ...StyleSheet.absoluteFillObject,
@@ -1842,23 +2048,23 @@ const styles = StyleSheet.create({
   controlsContainer: {
     backgroundColor: COLORS.lightBrown,
     paddingHorizontal: 24,
-    paddingVertical: 18,
+    paddingVertical: 12,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
   controlButton: {
-    width: 58,
-    height: 58,
-    borderRadius: 29,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: COLORS.beige,
     alignItems: 'center',
     justifyContent: 'center',
   },
   controlButtonTablet: {
-    width: 68,
-    height: 68,
-    borderRadius: 34,
+    width: 50,
+    height: 50,
+    borderRadius: 25,
   },
   disabledButton: {
     opacity: 0.45,
@@ -1869,7 +2075,7 @@ const styles = StyleSheet.create({
   },
   pageInfoText: {
     fontFamily: 'Afacad_400Regular',
-    fontSize: 20,
+    fontSize: 16,
     color: COLORS.beige,
   },
   loadingState: {
@@ -1892,16 +2098,20 @@ const styles = StyleSheet.create({
     marginTop: 10,
     textAlign: 'center',
   },
+  toolbarScrollView: {
+    backgroundColor: COLORS.lightBrown,
+    maxHeight: 70,
+  },
+  toolbarScrollContent: {
+    paddingHorizontal: 20,
+  },
   toolbarRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 20,
     paddingVertical: 10,
-    marginBottom: 10,
-    backgroundColor: COLORS.lightBrown,
-    zIndex: 10000,
-    position: 'relative',
+    gap: 12,
+    zIndex: 100,
+    overflow: 'visible',
   },
   cameraStatusRow: {
     paddingHorizontal: 20,
@@ -1971,6 +2181,49 @@ const styles = StyleSheet.create({
   pageTurnDropdownText: {
     fontFamily: 'Afacad_400Regular',
     fontSize: 16,
+    color: COLORS.darkBrown,
+  },
+  motionMenuWrapper: {
+    position: 'relative',
+  },
+  motionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.beige,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 8,
+    gap: 6,
+  },
+  motionButtonText: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 14,
+    color: COLORS.darkBrown,
+  },
+  motionDropdown: {
+    position: 'absolute',
+    top: 42,
+    left: 0,
+    backgroundColor: COLORS.beige,
+    borderRadius: 8,
+    paddingVertical: 6,
+    minWidth: 160,
+    borderWidth: 1,
+    borderColor: '#E2D6C8',
+    zIndex: 20000,
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 8,
+  },
+  motionDropdownItem: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  motionDropdownText: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 14,
     color: COLORS.darkBrown,
   },
 });
