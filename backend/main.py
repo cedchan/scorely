@@ -9,6 +9,8 @@ import shutil
 import struct
 import uuid
 import copy
+import hashlib
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 import xml.etree.ElementTree as ET
@@ -44,6 +46,8 @@ app.add_middleware(
 BASE_DIR = Path(__file__).resolve().parent
 CLOUD_DIR = BASE_DIR / "cloud"
 CLOUD_DIR.mkdir(exist_ok=True)
+SEED_LIBRARY_DIR = BASE_DIR / "seed_scores"
+SEED_LIBRARY_DIR.mkdir(exist_ok=True)
 HARDCODED_PDF_MXL_MAP = {
     "sample1.pdf": BASE_DIR / "uploads" / "sample1.mxl",
     "sample2.pdf": BASE_DIR / "uploads" / "sample2.mxl",
@@ -274,6 +278,18 @@ class ScorePagesResponse(BaseModel):
     musicxml_path: Optional[str] = None
 
 
+class LibraryScoreInfo(BaseModel):
+    job_id: str
+    title: str
+    musicxml_path: str
+    page_manifest_path: str
+    modified_at: str
+
+
+class LibraryScoresResponse(BaseModel):
+    scores: List[LibraryScoreInfo] = Field(default_factory=list)
+
+
 class UpdateTitleRequest(BaseModel):
     title: str
 
@@ -348,6 +364,78 @@ def extract_alignment(score_path: Path) -> Dict:
     except Exception as exc:
         logger.error("Failed to extract alignment from %s: %s", score_path, exc)
         return {"tempo": 120.0, "mappings": [], "version": ALIGNMENT_VERSION}
+
+
+def build_seed_job_id(seed_file: Path) -> str:
+    """Create a stable job id for a bundled library score."""
+    slug = re.sub(r"[^a-z0-9]+", "-", seed_file.stem.lower()).strip("-")
+    if not slug:
+        slug = "score"
+    digest = hashlib.sha1(seed_file.name.encode("utf-8")).hexdigest()[:8]
+    return f"seed-{slug[:40]}-{digest}"
+
+
+def list_seed_library_files(limit: int = 2) -> List[Path]:
+    """Return the most recent bundled MusicXML files for the home library."""
+    seed_files = [
+        path
+        for path in SEED_LIBRARY_DIR.iterdir()
+        if path.is_file() and path.suffix.lower() in {".mxl", ".musicxml"}
+    ]
+    seed_files.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    return seed_files[:limit]
+
+
+def register_seed_library_score(
+    seed_file: Path, background_tasks: Optional[BackgroundTasks] = None
+) -> LibraryScoreInfo:
+    """Mirror a bundled library score into the job cache and in-memory registry."""
+    job_id = build_seed_job_id(seed_file)
+    job_dir = get_job_dir(job_id)
+    mxl_path = job_dir / f"{job_id}.mxl"
+    existing_job = jobs.get(job_id, {})
+
+    if not mxl_path.exists() or seed_file.stat().st_mtime > mxl_path.stat().st_mtime:
+        shutil.copy2(seed_file, mxl_path)
+
+    manifest_path = job_dir / "manifest.json"
+    audio_path = job_dir / f"{job_id}_full.mp3"
+    audio_completed = audio_path.exists()
+    audio_status = existing_job.get("progress", {}).get("audio_conversion", "not_started")
+    if audio_completed:
+        audio_status = "completed"
+    elif audio_status not in {"queued", "processing"}:
+        audio_status = "queued"
+
+    jobs[job_id] = {
+        "status": "completed" if audio_completed else "processing",
+        "progress": {
+            "transcription": "completed",
+            "audio_conversion": audio_status,
+        },
+        "files": {
+            "musicxml": f"/api/download/{job_id}/{job_id}.mxl",
+            "full_audio": f"/api/download/{job_id}/{audio_path.name}" if audio_completed else None,
+            "score_pages": f"/api/score-pages/{job_id}" if manifest_path.exists() else None,
+            "parts": [],
+        },
+        "original_filename": seed_file.stem,
+    }
+
+    if (
+        not audio_completed
+        and background_tasks is not None
+        and existing_job.get("progress", {}).get("audio_conversion") not in {"queued", "processing"}
+    ):
+        background_tasks.add_task(run_audio_pipeline, job_id, mxl_path)
+
+    return LibraryScoreInfo(
+        job_id=job_id,
+        title=seed_file.stem,
+        musicxml_path=f"/api/download/{job_id}/{job_id}.mxl",
+        page_manifest_path=f"/api/score-pages/{job_id}",
+        modified_at=datetime.fromtimestamp(seed_file.stat().st_mtime).isoformat(),
+    )
 
 
 def _read_png_dimensions(image_path: Path) -> tuple[int, int]:
@@ -1035,6 +1123,23 @@ def run_full_pipeline(job_id: str, pdf_path: Path):
 @app.get("/")
 async def root():
     return {"status": "running", "service": "Scorely API"}
+
+
+@app.get("/api/library/recent-scores", response_model=LibraryScoresResponse)
+async def get_recent_library_scores(background_tasks: BackgroundTasks):
+    scores = []
+    for seed_file in list_seed_library_files(limit=2):
+        score_info = register_seed_library_score(seed_file, background_tasks)
+        job_dir = get_job_dir(score_info.job_id)
+        manifest_path = job_dir / "manifest.json"
+        mxl_path = job_dir / f"{score_info.job_id}.mxl"
+
+        if not manifest_path.exists():
+            render_score_pages(score_info.job_id, mxl_path)
+
+        scores.append(score_info)
+
+    return {"scores": scores}
 
 
 @app.post("/api/transcribe", response_model=TranscriptionResponse)

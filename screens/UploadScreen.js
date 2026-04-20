@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Platform,
   Pressable,
   SafeAreaView,
@@ -14,8 +15,10 @@ import {
 } from 'react-native';
 import { useFonts, Afacad_400Regular } from '@expo-google-fonts/afacad';
 import { FontAwesomeIcon } from '@fortawesome/react-native-fontawesome';
+import { SvgUri } from 'react-native-svg';
 import {
   faBars,
+  faEllipsisVertical,
   faFileMusic,
   faGrip,
   faMagnifyingGlass,
@@ -79,41 +82,114 @@ const DEFAULT_PROJECTS = [
   },
 ];
 
-const ScorePreview = () => {
+const SCORE_TITLE_OVERRIDES = {
+  'String Quartet in A minor, Op.2548 (Beatty, Stephen W.)': 'String Quartet in A minor',
+  '3065 Quartet for Clarinet, Violin, Viola and Cello':
+    'Quartet for Clarinet, Violin, Viola and Cello',
+  'Quartet for Clarinet, Violin, Viola and Cello in C major, Op.3065 (Beatty, Stephen W.)':
+    'Quartet for Clarinet, Violin, Viola and Cello',
+};
+
+const getDisplayTitle = (title) => SCORE_TITLE_OVERRIDES[title] || title;
+
+const buildPreviewUri = (project, apiBaseUrl) => {
+  if (!project?.previewImagePath) {
+    return null;
+  }
+
+  if (/^https?:\/\//i.test(project.previewImagePath)) {
+    return project.previewImagePath;
+  }
+
+  return `${apiBaseUrl}${project.previewImagePath}`;
+};
+
+const hydrateProjectPreview = async (project, apiBaseUrl) => {
+  if (!project?.pageManifestPath) {
+    return project;
+  }
+
+  try {
+    const response = await fetch(`${apiBaseUrl}${project.pageManifestPath}`);
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.detail || 'Failed to load score preview.');
+    }
+
+    return {
+      ...project,
+      title: getDisplayTitle(data.title || project.title),
+      previewImagePath: data.pages?.[0]?.image_path || project.previewImagePath || null,
+    };
+  } catch (error) {
+    console.error('Failed to load score preview:', error);
+    return project;
+  }
+};
+
+const ScorePreview = ({ project, apiBaseUrl }) => {
+  const previewUri = buildPreviewUri(project, apiBaseUrl);
+  const isSvgPreview = previewUri?.toLowerCase().includes('.svg');
+  const shouldUseSvgRenderer = isSvgPreview && Platform.OS !== 'web';
+
   return (
     <View style={styles.sheetPreview}>
-      <View style={styles.sheetPreviewHeader} />
-      <View style={styles.staffGroup}>
-        <View style={styles.staffLine} />
-        <View style={styles.staffLine} />
-        <View style={styles.staffLine} />
-      </View>
-      <View style={styles.staffGroupTight}>
-        <View style={styles.staffLineLight} />
-        <View style={styles.staffLineLight} />
-      </View>
+      {previewUri ? (
+        shouldUseSvgRenderer ? (
+          <SvgUri uri={previewUri} width="100%" height="100%" style={styles.sheetPreviewSvg} />
+        ) : (
+          <Image source={{ uri: previewUri }} style={styles.sheetPreviewImage} resizeMode="cover" />
+        )
+      ) : (
+        <View style={styles.sheetPreviewEmpty}>
+          <FontAwesomeIcon icon={faFileMusic} size={18} color={COLORS.muted} />
+          <Text style={styles.sheetPreviewEmptyText}>Preview loading</Text>
+        </View>
+      )}
     </View>
   );
 };
 
-const ScoreCard = ({ project, width, onPress }) => {
+const ScoreCard = ({ project, width, onPress, apiBaseUrl }) => {
   return (
     <Pressable onPress={() => onPress(project)} style={[styles.projectCard, { width }]}>
       <View style={styles.projectCardTop}>
-        <View style={styles.projectIconWrap}>
-          <FontAwesomeIcon icon={project.icon || faFileMusic} size={18} color={COLORS.primary} />
+        <View style={styles.overflowIconWrap}>
+          <FontAwesomeIcon icon={faEllipsisVertical} size={14} color={COLORS.muted} />
         </View>
         <View style={styles.metaBadge}>
           <Text style={styles.metaBadgeText}>{project.updatedAt}</Text>
         </View>
       </View>
 
-      <ScorePreview />
+      <ScorePreview project={project} apiBaseUrl={apiBaseUrl} />
 
       <Text style={styles.projectTitle}>{project.title}</Text>
-      <Text style={styles.projectSubtitle}>{project.subtitle || 'Open score'}</Text>
+      {project.subtitle ? <Text style={styles.projectSubtitle}>{project.subtitle}</Text> : null}
     </Pressable>
   );
+};
+
+const formatProjectUpdatedAt = (modifiedAt) => {
+  if (!modifiedAt) {
+    return 'Recent';
+  }
+
+  const parsedDate = new Date(modifiedAt);
+  if (Number.isNaN(parsedDate.getTime())) {
+    return 'Recent';
+  }
+
+  const today = new Date();
+  if (parsedDate.toDateString() === today.toDateString()) {
+    return 'Today';
+  }
+
+  return parsedDate.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+  });
 };
 
 export default function UploadScreen({ navigation }) {
@@ -121,6 +197,7 @@ export default function UploadScreen({ navigation }) {
   const apiBaseUrl = getApiBaseUrl();
 
   const [latestProject, setLatestProject] = useState(null);
+  const [seededProjects, setSeededProjects] = useState([]);
   const [viewMode, setViewMode] = useState('grid');
   const [searchQuery, setSearchQuery] = useState('');
   const [username, setUsernameState] = useState('');
@@ -139,6 +216,59 @@ export default function UploadScreen({ navigation }) {
   }, []);
 
   useEffect(() => {
+    let isActive = true;
+
+    const loadSeededProjects = async () => {
+      try {
+        const response = await fetch(`${apiBaseUrl}/api/library/recent-scores`);
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.detail || 'Failed to load recent scores.');
+        }
+
+        if (!isActive) {
+          return;
+        }
+
+        const baseProjects = (data.scores || []).map((score) => ({
+          id: `project-${score.job_id}`,
+          title: getDisplayTitle(score.title),
+          subtitle: '',
+          icon: faFileMusic,
+          action: 'open',
+          kind: 'score',
+          updatedAt: formatProjectUpdatedAt(score.modified_at),
+          jobId: score.job_id,
+          musicxmlPath: score.musicxml_path,
+          pageManifestPath: score.page_manifest_path,
+        }));
+
+        const projectsWithPreviews = await Promise.all(
+          baseProjects.map((project) => hydrateProjectPreview(project, apiBaseUrl))
+        );
+
+        if (!isActive) {
+          return;
+        }
+
+        setSeededProjects(projectsWithPreviews);
+      } catch (error) {
+        if (isActive) {
+          console.error('Failed to load recent library scores:', error);
+          setSeededProjects([]);
+        }
+      }
+    };
+
+    loadSeededProjects();
+
+    return () => {
+      isActive = false;
+    };
+  }, [apiBaseUrl]);
+
+  useEffect(() => {
     return () => {
       if (pollTimerRef.current) {
         clearTimeout(pollTimerRef.current);
@@ -153,12 +283,13 @@ export default function UploadScreen({ navigation }) {
           const response = await fetch(`${apiBaseUrl}${latestProject.pageManifestPath}`);
           const data = await response.json();
 
-          if (response.ok && data.title) {
+          if (response.ok) {
             setLatestProject((prev) => {
               if (!prev) return prev;
               return {
                 ...prev,
-                title: data.title,
+                title: getDisplayTitle(data.title || prev.title),
+                previewImagePath: data.pages?.[0]?.image_path || prev.previewImagePath || null,
               };
             });
           }
@@ -366,18 +497,22 @@ export default function UploadScreen({ navigation }) {
   };
 
   const projects = useMemo(() => {
+    const placeholderProjects = DEFAULT_PROJECTS.filter((project) => project.action === 'placeholder');
+    const seededProjectSlots = seededProjects.slice(0, placeholderProjects.length);
+    const fallbackPlaceholders = placeholderProjects.slice(seededProjectSlots.length);
+
     if (!latestProject) {
-      return DEFAULT_PROJECTS;
+      return [DEFAULT_PROJECTS[0], DEFAULT_PROJECTS[1], ...seededProjectSlots, ...fallbackPlaceholders];
     }
 
     return [
       DEFAULT_PROJECTS[0],
       latestProject,
       DEFAULT_PROJECTS[1],
-      DEFAULT_PROJECTS[2],
-      DEFAULT_PROJECTS[3],
+      ...seededProjectSlots,
+      ...fallbackPlaceholders,
     ];
-  }, [latestProject]);
+  }, [latestProject, seededProjects]);
 
   const libraryProjectsBase = useMemo(() => {
     return projects.filter((project) => project.action !== 'upload' && project.action !== 'join');
@@ -517,6 +652,7 @@ export default function UploadScreen({ navigation }) {
                         project={project}
                         width={cardWidth}
                         onPress={openProject}
+                        apiBaseUrl={apiBaseUrl}
                       />
                     ))}
                   </View>
@@ -532,23 +668,23 @@ export default function UploadScreen({ navigation }) {
                         ]}
                       >
                         <View style={styles.listRowLeft}>
-                          <View style={styles.projectIconWrapSmall}>
-                            <FontAwesomeIcon
-                              icon={project.icon}
-                              size={16}
-                              color={COLORS.primary}
-                            />
-                          </View>
                           <View style={styles.listCopyWrap}>
                             <Text style={styles.listTitle}>{project.title}</Text>
-                            <Text style={styles.listSubtitle}>
-                              {project.subtitle || 'Open score'}
-                            </Text>
+                            {project.subtitle ? (
+                              <Text style={styles.listSubtitle}>{project.subtitle}</Text>
+                            ) : null}
                           </View>
                         </View>
 
                         <View style={styles.listMeta}>
                           <Text style={styles.listMetaText}>{project.updatedAt}</Text>
+                          <View style={styles.listOverflowIconWrap}>
+                            <FontAwesomeIcon
+                              icon={faEllipsisVertical}
+                              size={14}
+                              color={COLORS.muted}
+                            />
+                          </View>
                         </View>
                       </Pressable>
                     ))}
@@ -628,11 +764,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.stroke,
     padding: 20,
-    shadowColor: COLORS.primary,
-    shadowOpacity: 0.08,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 3,
     alignSelf: 'center',
   },
 
@@ -669,7 +800,7 @@ const styles = StyleSheet.create({
   secondaryAction: {
     borderWidth: 1,
     borderColor: COLORS.stroke,
-    backgroundColor: COLORS.accentSoft,
+    backgroundColor: COLORS.background,
     borderRadius: 20,
     paddingVertical: 16,
     paddingHorizontal: 16,
@@ -840,11 +971,6 @@ const styles = StyleSheet.create({
     padding: 16,
     borderWidth: 1,
     borderColor: COLORS.stroke,
-    shadowColor: COLORS.primary,
-    shadowOpacity: 0.08,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 3,
   },
 
   projectCardTop: {
@@ -852,6 +978,13 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 12,
+  },
+
+  overflowIconWrap: {
+    width: 24,
+    height: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
   metaBadge: {
@@ -869,63 +1002,41 @@ const styles = StyleSheet.create({
     color: COLORS.muted,
   },
 
-  projectIconWrap: {
-    width: 42,
-    height: 42,
-    borderRadius: 14,
-    backgroundColor: '#F2E8DA',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  projectIconWrapSmall: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
-    backgroundColor: '#F2E8DA',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
   sheetPreview: {
     backgroundColor: COLORS.cardSoft,
     borderWidth: 1,
     borderColor: COLORS.stroke,
     borderRadius: 18,
-    height: 100,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
+    height: 136,
     marginBottom: 14,
-    justifyContent: 'space-between',
+    overflow: 'hidden',
+    alignItems: 'stretch',
+    justifyContent: 'center',
   },
 
-  sheetPreviewHeader: {
-    width: '44%',
-    height: 8,
-    borderRadius: 999,
-    backgroundColor: COLORS.accent,
+  sheetPreviewSvg: {
+    flex: 1,
+    backgroundColor: COLORS.cardSoft,
   },
 
-  staffGroup: {
-    gap: 10,
-  },
-
-  staffGroupTight: {
-    gap: 10,
-  },
-
-  staffLine: {
+  sheetPreviewImage: {
     width: '100%',
-    height: 8,
-    borderRadius: 999,
-    backgroundColor: '#EDE2D3',
+    height: '100%',
+    backgroundColor: COLORS.cardSoft,
   },
 
-  staffLineLight: {
-    width: '88%',
-    height: 8,
-    borderRadius: 999,
-    backgroundColor: '#F1E8DC',
+  sheetPreviewEmpty: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#F8F3EB',
+  },
+
+  sheetPreviewEmptyText: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 14,
+    color: COLORS.muted,
   },
 
   projectTitle: {
@@ -991,12 +1102,21 @@ const styles = StyleSheet.create({
 
   listMeta: {
     marginLeft: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
   },
 
   listMetaText: {
     fontFamily: 'Afacad_400Regular',
     fontSize: 14,
     color: COLORS.muted,
+  },
+
+  listOverflowIconWrap: {
+    width: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
   statusCard: {
