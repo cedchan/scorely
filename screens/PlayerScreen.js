@@ -81,6 +81,7 @@ export default function PlayerScreen({ route, navigation }) {
     // { user_id: 'test2', username: 'BraveTiger99' },
   ]);
   const [selectedPresenceUser, setSelectedPresenceUser] = useState(null);
+  const [presenceTooltipPosition, setPresenceTooltipPosition] = useState({ x: 0, index: 0 });
   const [hiddenAnnotationUsers, setHiddenAnnotationUsers] = useState(new Set());
   const [showUserVisibilityDropdown, setShowUserVisibilityDropdown] = useState(false);
   const videoRef = useRef(null);
@@ -1196,13 +1197,29 @@ export default function PlayerScreen({ route, navigation }) {
   return (
     <SafeAreaView
       style={styles.container}
-      onStartShouldSetResponder={() => {
+      onStartShouldSetResponder={(event) => {
+        // Check if the touch target is within the visibility dropdown
+        const target = event.target;
+        let isDropdownClick = false;
+
+        // Walk up the DOM tree to check if we're inside the dropdown
+        let currentElement = target;
+        while (currentElement) {
+          if (currentElement.className &&
+              (String(currentElement.className).includes('visibilityDropdown') ||
+               String(currentElement.className).includes('visibilityRow'))) {
+            isDropdownClick = true;
+            break;
+          }
+          currentElement = currentElement.parentElement;
+        }
+
         let shouldCapture = false;
         if (selectedPresenceUser) {
           setSelectedPresenceUser(null);
           shouldCapture = true;
         }
-        if (showUserVisibilityDropdown) {
+        if (showUserVisibilityDropdown && !isDropdownClick) {
           setShowUserVisibilityDropdown(false);
           shouldCapture = true;
         }
@@ -1265,24 +1282,27 @@ export default function PlayerScreen({ route, navigation }) {
         <View style={styles.headerActions}>
           {presentUsers.length > 0 && (
             <View style={styles.presenceContainer}>
-              {presentUsers.map((user) => (
-                <View key={user.user_id} style={styles.presenceWrapper}>
-                  <TouchableOpacity
-                    style={styles.presenceAvatar}
-                    onPress={() => setSelectedPresenceUser(
-                      selectedPresenceUser === user.user_id ? null : user.user_id
-                    )}
-                  >
-                    <Text style={styles.presenceAvatarText}>
-                      {user.username?.charAt(0).toUpperCase() || '?'}
-                    </Text>
-                  </TouchableOpacity>
-                  {selectedPresenceUser === user.user_id && (
-                    <View style={styles.presenceTooltip}>
-                      <Text style={styles.presenceTooltipText}>{user.username}</Text>
-                    </View>
-                  )}
-                </View>
+              {presentUsers.map((user, index) => (
+                <TouchableOpacity
+                  key={user.user_id}
+                  style={styles.presenceAvatar}
+                  onPress={(event) => {
+                    if (selectedPresenceUser === user.user_id) {
+                      setSelectedPresenceUser(null);
+                    } else {
+                      setSelectedPresenceUser(user.user_id);
+                      // Calculate position based on avatar index
+                      // Each avatar is 32px wide + 6px gap
+                      const baseOffset = shareCode ? 280 : 20;
+                      const avatarOffset = index * (32 + 6);
+                      setPresenceTooltipPosition({ x: baseOffset + avatarOffset + 16, index });
+                    }
+                  }}
+                >
+                  <Text style={styles.presenceAvatarText}>
+                    {user.username?.charAt(0).toUpperCase() || '?'}
+                  </Text>
+                </TouchableOpacity>
               ))}
             </View>
           )}
@@ -1297,6 +1317,24 @@ export default function PlayerScreen({ route, navigation }) {
           )}
         </View>
       </View>
+
+      {/* Presence Tooltip Overlay - rendered separately for proper z-index */}
+      {selectedPresenceUser && (
+        <View
+          style={[
+            styles.presenceTooltipOverlay,
+            {
+              right: width - presenceTooltipPosition.x,
+              top: 72,
+            }
+          ]}
+          pointerEvents="none"
+        >
+          <Text style={styles.presenceTooltipText}>
+            {presentUsers.find(u => u.user_id === selectedPresenceUser)?.username}
+          </Text>
+        </View>
+      )}
 
       {/* Annotation Toolbar */}
       <View style={styles.toolbarRow}>
@@ -1740,9 +1778,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
   },
-  presenceWrapper: {
-    position: 'relative',
-  },
   presenceAvatar: {
     width: 32,
     height: 32,
@@ -1759,18 +1794,17 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: COLORS.beige,
   },
-  presenceTooltip: {
+  presenceTooltipOverlay: {
     position: 'absolute',
-    top: 38,
-    left: '50%',
-    transform: 'translateX(-50%)',
     backgroundColor: COLORS.darkBrown,
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 6,
-    zIndex: 1000,
+    zIndex: 999999,
     minWidth: 80,
     alignItems: 'center',
+    elevation: 999,
+    transform: [{ translateX: -40 }],
   },
   presenceTooltipText: {
     fontFamily: 'Afacad_400Regular',

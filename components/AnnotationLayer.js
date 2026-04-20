@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react';
-import { PanResponder, StyleSheet, View } from 'react-native';
+import { PanResponder, StyleSheet, View, Text } from 'react-native';
 import Svg, { Path, Circle, Rect, Text as SvgText } from 'react-native-svg';
 
 const COLORS = {
@@ -280,6 +280,14 @@ export default function AnnotationLayer({
     return user?.username || 'Unknown';
   };
 
+  // Find remote temp annotations for username labels
+  const remoteTempAnnotations = pageAnnotations.filter((annotation) => {
+    if (annotation.type !== 'path' || !annotation.path) return false;
+    const isRemote = annotation.user_id && annotation.user_id !== currentUserId;
+    const isTemp = annotation._isTemp;
+    return isRemote && isTemp && annotation.path.points.length > 0;
+  });
+
   return (
     <View
       style={[styles.container, { width, height }]}
@@ -291,49 +299,18 @@ export default function AnnotationLayer({
         {pageAnnotations.map((annotation) => {
           if (annotation.type === 'path' && annotation.path) {
             const pathString = pointsToPathString(annotation.path.points);
-            const isRemote = annotation.user_id && annotation.user_id !== currentUserId;
-            const isTemp = annotation._isTemp;
-            const showLabel = isRemote && isTemp && annotation.path.points.length > 0;
-
-            // Get the last point for the label position
-            const lastPoint = annotation.path.points[annotation.path.points.length - 1];
-            const labelX = showLabel ? (lastPoint.x / 100) * normalizeWidth + imageOffsetX : 0;
-            const labelY = showLabel ? (lastPoint.y / 100) * normalizeHeight + imageOffsetY : 0;
 
             return (
-              <React.Fragment key={annotation.id}>
-                <Path
-                  d={pathString}
-                  stroke={annotation.path.color}
-                  strokeWidth={annotation.path.strokeWidth}
-                  opacity={annotation.path.opacity}
-                  fill="none"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-                {showLabel && (
-                  <>
-                    <Rect
-                      x={labelX - 40}
-                      y={labelY - 25}
-                      width={80}
-                      height={20}
-                      rx={4}
-                      fill={COLORS.darkBrown}
-                    />
-                    <SvgText
-                      x={labelX}
-                      y={labelY - 11}
-                      fontSize={12}
-                      fill={COLORS.beige}
-                      fontFamily="Afacad_400Regular"
-                      textAnchor="middle"
-                    >
-                      {getUsernameById(annotation.user_id)}
-                    </SvgText>
-                  </>
-                )}
-              </React.Fragment>
+              <Path
+                key={annotation.id}
+                d={pathString}
+                stroke={annotation.path.color}
+                strokeWidth={annotation.path.strokeWidth}
+                opacity={annotation.path.opacity}
+                fill="none"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
             );
           }
 
@@ -419,6 +396,31 @@ export default function AnnotationLayer({
           />
         )}
       </Svg>
+
+      {/* Username labels overlay - rendered outside SVG for proper z-index */}
+      {remoteTempAnnotations.map((annotation) => {
+        const lastPoint = annotation.path.points[annotation.path.points.length - 1];
+        const labelX = (lastPoint.x / 100) * normalizeWidth + imageOffsetX;
+        const labelY = (lastPoint.y / 100) * normalizeHeight + imageOffsetY;
+
+        return (
+          <View
+            key={`label-${annotation.id}`}
+            style={[
+              styles.usernameLabel,
+              {
+                left: labelX - 40,
+                top: labelY - 30,
+              },
+            ]}
+            pointerEvents="none"
+          >
+            <Text style={styles.usernameLabelText}>
+              {getUsernameById(annotation.user_id)}
+            </Text>
+          </View>
+        );
+      })}
     </View>
   );
 }
@@ -426,11 +428,28 @@ export default function AnnotationLayer({
 const styles = StyleSheet.create({
   container: {
     position: 'absolute',
-    zIndex: 10,
+    zIndex: 100000,
   },
   svg: {
     position: 'absolute',
     top: 0,
     left: 0,
+    zIndex: 1,
+  },
+  usernameLabel: {
+    position: 'absolute',
+    backgroundColor: COLORS.darkBrown,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+    zIndex: 999999,
+    minWidth: 80,
+    alignItems: 'center',
+    elevation: 999,
+  },
+  usernameLabelText: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 12,
+    color: COLORS.beige,
   },
 });

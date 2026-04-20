@@ -148,15 +148,6 @@ fi
 # Setup SSL certificates and get local IP
 LOCAL_IP="$(setup_certificates)"
 
-echo "📦 Starting Docker services (API + Audiveris)..."
-PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH" "${DOCKER_BIN}" compose up --build -d
-
-echo "⏳ Waiting for API to be ready..."
-wait_for_http "https://localhost:8443/" "API (HTTPS)" 60
-
-echo "✅ API is ready!"
-echo ""
-
 echo "📦 Updating frontend dependencies..."
 npm install
 
@@ -165,7 +156,20 @@ echo "🚀 Starting Expo development server..."
 npx expo start --web --host lan --clear &
 EXPO_PID=$!
 
+echo "⏳ Waiting for Expo to be ready..."
 wait_for_http "http://localhost:8081" "Expo web app" 90
+
+echo "✅ Expo is ready!"
+echo ""
+
+echo "📦 Starting Docker services (API + Audiveris + Nginx)..."
+PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH" "${DOCKER_BIN}" compose up --build -d
+
+echo "⏳ Waiting for backend services..."
+wait_for_http "https://localhost:8443/" "API (HTTPS)" 60
+wait_for_http "https://localhost:443/" "Nginx (HTTPS)" 30
+
+echo "✅ All services are ready!"
 
 echo ""
 echo "✅ Scorely is ready!"
@@ -174,22 +178,27 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "📱 LOCAL ACCESS (on this computer)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "   Web App:  http://localhost:8081"
-echo "   Backend:  https://localhost:8443"
-echo "   API Docs: https://localhost:8443/docs"
+echo "   Web App:     https://localhost"
+echo "   API:         https://localhost/api/"
+echo "   API Docs:    https://localhost/docs"
+echo "   Expo Dev:    http://localhost:8081 (dev only)"
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "📱 LAN ACCESS (iPad/other devices on same WiFi)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "   Web App:  https://${LOCAL_IP}"
-echo "   Backend:  https://${LOCAL_IP}:8443"
-echo "   API Docs: https://${LOCAL_IP}:8443/docs"
+echo "   Web App:     https://${LOCAL_IP}"
+echo "   API:         https://${LOCAL_IP}/api/"
+echo "   API Docs:    https://${LOCAL_IP}/docs"
 echo ""
-echo "   💡 For iPad camera access:"
-echo "      • Open https://${LOCAL_IP} in Safari"
-echo "      • Accept certificate warning once"
-echo "      • Camera features will work!"
+echo "   💡 For iPad access:"
+echo "      1. Open https://${LOCAL_IP} in Safari"
+echo "      2. Tap 'Show Details' → 'visit this website'"
+echo "      3. Accept the certificate warning (one-time)"
+echo "      4. Camera and all features will work!"
+echo ""
+echo "   🔒 Everything runs through nginx on port 443"
+echo "      Frontend + API are unified under one HTTPS endpoint"
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
@@ -199,23 +208,14 @@ if [[ "${ENABLE_TUNNELS}" == "1" ]]; then
     echo "   Note: For local network iPad testing, use https://${LOCAL_IP} instead!"
     echo ""
 
-    # Read API tunnel data
-    api_tunnel_output="$(start_localtunnel "8000" "API")"
-    API_TUNNEL_PID="$(echo "$api_tunnel_output" | sed -n '1p')"
-    API_TUNNEL_LOG="$(echo "$api_tunnel_output" | sed -n '2p')"
-    API_TUNNEL_URL="$(echo "$api_tunnel_output" | sed -n '3p')"
-
-    # Read web tunnel data
-    web_tunnel_output="$(start_localtunnel "8081" "web app")"
+    # Tunnel the unified HTTPS nginx endpoint (port 443)
+    web_tunnel_output="$(start_localtunnel "443" "Scorely (nginx HTTPS)")"
     WEB_TUNNEL_PID="$(echo "$web_tunnel_output" | sed -n '1p')"
     WEB_TUNNEL_LOG="$(echo "$web_tunnel_output" | sed -n '2p')"
     WEB_TUNNEL_URL="$(echo "$web_tunnel_output" | sed -n '3p')"
 
-    ENCODED_API_TUNNEL_URL="${API_TUNNEL_URL//:/%3A}"
-    ENCODED_API_TUNNEL_URL="${ENCODED_API_TUNNEL_URL//\//%2F}"
-
-    echo "   🌍 Remote HTTPS app: ${WEB_TUNNEL_URL}/?api=${ENCODED_API_TUNNEL_URL}"
-    echo "   🌍 Remote HTTPS API: ${API_TUNNEL_URL}"
+    echo "   🌍 Remote HTTPS: ${WEB_TUNNEL_URL}"
+    echo "      (Frontend + API both accessible through this URL)"
 fi
 
 echo ""

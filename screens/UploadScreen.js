@@ -101,7 +101,7 @@ const ScoreCard = ({ project, width, onPress }) => {
     <Pressable onPress={() => onPress(project)} style={[styles.projectCard, { width }]}>
       <View style={styles.projectCardTop}>
         <View style={styles.projectIconWrap}>
-          <FontAwesomeIcon icon={project.icon} size={18} color={COLORS.primary} />
+          <FontAwesomeIcon icon={project.icon || faFileMusic} size={18} color={COLORS.primary} />
         </View>
         <View style={styles.metaBadge}>
           <Text style={styles.metaBadgeText}>{project.updatedAt}</Text>

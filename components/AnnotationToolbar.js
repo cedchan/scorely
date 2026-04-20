@@ -206,7 +206,11 @@ export default function AnnotationToolbar({
         </TouchableOpacity>
 
         {showUserVisibilityDropdown && (
-          <View style={styles.visibilityDropdown}>
+          <View
+            style={styles.visibilityDropdown}
+            onStartShouldSetResponder={() => true}
+            onResponderRelease={(e) => e.stopPropagation()}
+          >
             {usersWithAnnotations.length > 0 ? (
               usersWithAnnotations.map((user) => (
                 <View key={user.user_id} style={styles.visibilityRow}>
