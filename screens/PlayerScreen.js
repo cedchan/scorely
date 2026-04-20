@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Image,
   Platform,
+  Pressable,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -17,23 +18,20 @@ import { FontAwesomeIcon } from '@fortawesome/react-native-fontawesome';
 import {
   faArrowLeft,
   faBackward,
+  faChevronDown,
+  faCopy,
   faEdit,
   faForward,
   faMusic,
   faPause,
   faPlay,
-  faShare,
-  faCopy,
 } from '@fortawesome/free-solid-svg-icons';
 import AnnotationLayer from '../components/AnnotationLayer';
 import AnnotationToolbar from '../components/AnnotationToolbar';
 import annotationSyncService from '../services/annotationSync';
 import { getApiBaseUrl } from '../services/apiBaseUrl';
 import { initializeUserIdentity } from '../services/userIdentity';
-import {
-  FilesetResolver,
-  FaceLandmarker
-} from '@mediapipe/tasks-vision';
+import { FilesetResolver, FaceLandmarker } from '@mediapipe/tasks-vision';
 import { config } from '../config';
 
 const COLORS = {
@@ -43,7 +41,6 @@ const COLORS = {
 };
 
 const MEDIAPIPE_VERSION = '0.10.34';
-// Small perceptual lead so the visual highlight lands with the heard note onset.
 const PLAYBACK_HIGHLIGHT_LEAD_SECONDS = 0.18;
 
 export default function PlayerScreen({ route, navigation }) {
@@ -64,9 +61,8 @@ export default function PlayerScreen({ route, navigation }) {
   const [alignmentMappings, setAlignmentMappings] = useState([]);
   const [activeMeasure, setActiveMeasure] = useState(null);
   const [activeMeasureIndex, setActiveMeasureIndex] = useState(null);
-  // Nod state
-  const [nodEnabled, setNodEnabled] = useState(false);
-  // Annotation state
+  const [pageTurnMode, setPageTurnMode] = useState('manual');
+  const [showPageTurnMenu, setShowPageTurnMenu] = useState(false);
   const [annotations, setAnnotations] = useState([]);
   const [annotationsEnabled, setAnnotationsEnabled] = useState(false);
   const [currentTool, setCurrentTool] = useState('pen');
@@ -75,13 +71,8 @@ export default function PlayerScreen({ route, navigation }) {
   const [userId, setUserId] = useState('');
   const [username, setUsername] = useState('');
   const [shareCode, setShareCode] = useState(null);
-  const [presentUsers, setPresentUsers] = useState([
-    // Uncomment below to test presence UI:
-    // { user_id: 'test1', username: 'SwiftEagle42' },
-    // { user_id: 'test2', username: 'BraveTiger99' },
-  ]);
+  const [presentUsers, setPresentUsers] = useState([]);
   const [selectedPresenceUser, setSelectedPresenceUser] = useState(null);
-  const [presenceTooltipPosition, setPresenceTooltipPosition] = useState({ x: 0, index: 0 });
   const [hiddenAnnotationUsers, setHiddenAnnotationUsers] = useState(new Set());
   const [showUserVisibilityDropdown, setShowUserVisibilityDropdown] = useState(false);
   const videoRef = useRef(null);
@@ -98,19 +89,27 @@ export default function PlayerScreen({ route, navigation }) {
   const updateMeasureFromTimeRef = useRef(() => {});
   const jobId = route.params?.jobId;
   const apiBaseUrl = route.params?.apiBaseUrl || getApiBaseUrl();
-  const pageManifestPath = route.params?.pageManifestPath || (jobId ? `/api/score-pages/${jobId}` : null);
+  const pageManifestPath =
+    route.params?.pageManifestPath || (jobId ? `/api/score-pages/${jobId}` : null);
   const cacheToken = jobId || route.params?.fileName || 'score';
   const isTabletLayout = width >= 900;
   const pageHorizontalPadding = isTabletLayout ? 56 : 20;
   const pageVerticalPadding = isTabletLayout ? 24 : 16;
   const pageTopPadding = isTabletLayout ? 32 : 24;
   const controlsHeight = isTabletLayout ? 108 : 94;
-  const compactHeaderHeight = 56; // Header height
-  const toolbarHeight = 58; // Annotation toolbar height (padding 10*2 + content ~38)
+  const compactHeaderHeight = 56;
+  const toolbarHeight = 58;
   const availablePageHeight = Math.max(
     320,
-    height - compactHeaderHeight - toolbarHeight - controlsHeight - pageVerticalPadding - pageTopPadding
+    height -
+      compactHeaderHeight -
+      toolbarHeight -
+      controlsHeight -
+      pageVerticalPadding -
+      pageTopPadding
   );
+  const nodEnabled = pageTurnMode === 'nod';
+
   const measureRegionLookup = useMemo(() => {
     const lookup = new Map();
     pages.forEach((page, pageIndex) => {
@@ -119,7 +118,6 @@ export default function PlayerScreen({ route, navigation }) {
         if (!Number.isFinite(regionIndex) || lookup.has(regionIndex)) {
           return;
         }
-
         lookup.set(regionIndex, {
           ...region,
           pageIndex,
@@ -134,11 +132,9 @@ export default function PlayerScreen({ route, navigation }) {
     if (measureRegionLookup.size || !pages.length || !alignmentMappings.length) {
       return [];
     }
-
     if (!pages.length || !alignmentMappings.length) {
       return [];
     }
-
     const measuresPerPage = Math.ceil(alignmentMappings.length / pages.length);
     return pages.map((page, index) => {
       const startIndex = index * measuresPerPage;
@@ -165,11 +161,10 @@ export default function PlayerScreen({ route, navigation }) {
     return lookup;
   }, [alignmentMappings]);
 
-  let [fontsLoaded] = useFonts({
+  const [fontsLoaded] = useFonts({
     Afacad_400Regular,
   });
 
-  // Initialize user identity
   useEffect(() => {
     initializeUserIdentity().then(({ userId, username }) => {
       setUserId(userId);
@@ -179,19 +174,16 @@ export default function PlayerScreen({ route, navigation }) {
 
   const normalizePageMeasureRegions = (pageList = []) => {
     let fallbackMeasureIndex = 0;
-
     return pageList.map((page) => {
       const measureRegions = (page.measure_regions || []).map((region) => {
         const parsedIndex = Number(region.measure_index);
         const measureIndex = Number.isFinite(parsedIndex) ? parsedIndex : fallbackMeasureIndex;
         fallbackMeasureIndex = Math.max(fallbackMeasureIndex + 1, measureIndex + 1);
-
         return {
           ...region,
           measure_index: measureIndex,
         };
       });
-
       return {
         ...page,
         measure_regions: measureRegions,
@@ -203,7 +195,6 @@ export default function PlayerScreen({ route, navigation }) {
     if (!svgXml || !region) {
       return svgXml;
     }
-
     const rectX = region.x * 21000;
     const rectY = region.y * 29700;
     const rectWidth = region.width * 21000;
@@ -217,7 +208,6 @@ export default function PlayerScreen({ route, navigation }) {
       ' stroke-width="48"',
       ' />',
     ].join('');
-
     return svgXml.replace(
       /(<svg[^>]*class="definition-scale"[^>]*>)([\s\S]*?)(<\/svg>)/,
       `$1$2${highlightRect}$3`
@@ -249,7 +239,9 @@ export default function PlayerScreen({ route, navigation }) {
         const normalizedPages = normalizePageMeasureRegions(data.pages || []);
         const hydratedPages = await Promise.all(
           normalizedPages.map(async (page) => {
-            const pageUri = `${apiBaseUrl}${page.image_path}?job=${encodeURIComponent(cacheToken)}&page=${page.page_number}`;
+            const pageUri = `${apiBaseUrl}${page.image_path}?job=${encodeURIComponent(
+              cacheToken
+            )}&page=${page.page_number}`;
             const isSvgPage = String(page.image_path || '').toLowerCase().includes('.svg');
             let svgXml = null;
 
@@ -259,7 +251,7 @@ export default function PlayerScreen({ route, navigation }) {
                 if (svgResponse.ok) {
                   svgXml = await svgResponse.text();
                 }
-              } catch (svgLoadError) {
+              } catch {
                 svgXml = null;
               }
             }
@@ -306,7 +298,7 @@ export default function PlayerScreen({ route, navigation }) {
 
         setAudioUrl(null);
         audioPollTimerRef.current = setTimeout(loadAudio, 2000);
-      } catch (loadError) {
+      } catch {
         setAudioUrl(null);
         audioPollTimerRef.current = setTimeout(loadAudio, 2000);
       }
@@ -321,9 +313,11 @@ export default function PlayerScreen({ route, navigation }) {
       }
     };
   }, [apiBaseUrl, cacheToken, jobId]);
+
   useEffect(() => {
     currentPageRef.current = currentPage;
   }, [currentPage]);
+
   useEffect(() => {
     const loadAlignment = async () => {
       if (!jobId) {
@@ -348,7 +342,7 @@ export default function PlayerScreen({ route, navigation }) {
             };
           })
         );
-      } catch (loadError) {
+      } catch {
         setAlignmentMappings([]);
       }
     };
@@ -363,21 +357,17 @@ export default function PlayerScreen({ route, navigation }) {
     setActiveMeasureIndex(null);
   }, [playbackUrl]);
 
-  // Annotation WebSocket connection
   useEffect(() => {
     if (!jobId || !userId || !username) return;
 
-    // Connect to annotation sync
     annotationSyncService.connect(apiBaseUrl, jobId, userId, username);
 
-    // Set up event listeners
     const handleSyncResponse = ({ annotations: syncedAnnotations }) => {
       setAnnotations(syncedAnnotations);
     };
 
     const handleAnnotationAdded = ({ annotation }) => {
       setAnnotations((prev) => {
-        // Avoid duplicates
         if (prev.some((a) => a.id === annotation.id)) {
           return prev;
         }
@@ -390,11 +380,11 @@ export default function PlayerScreen({ route, navigation }) {
         const exists = prev.some((a) => a.id === annotation.id);
         if (exists) {
           return prev.map((a) => (a.id === annotation.id ? annotation : a));
-        } else {
-          return [...prev, annotation];
         }
+        return [...prev, annotation];
       });
     };
+
     const handleAnnotationDeleted = ({ annotationId }) => {
       setAnnotations((prev) => prev.filter((a) => a.id !== annotationId));
     };
@@ -408,18 +398,14 @@ export default function PlayerScreen({ route, navigation }) {
     };
 
     const handlePresenceUpdate = ({ users }) => {
-      console.log('Presence update received:', users);
-      // Filter out current user
-      const otherUsers = users.filter(u => u.user_id !== userId);
-      console.log('Other users present:', otherUsers);
+      const otherUsers = users.filter((u) => u.user_id !== userId);
       setPresentUsers(otherUsers);
     };
 
     const handleUserJoined = ({ userId: joinedUserId, username: joinedUsername }) => {
-      console.log('User joined:', joinedUserId, joinedUsername);
       if (joinedUserId !== userId) {
         setPresentUsers((prev) => {
-          if (prev.some(u => u.user_id === joinedUserId)) {
+          if (prev.some((u) => u.user_id === joinedUserId)) {
             return prev;
           }
           return [...prev, { user_id: joinedUserId, username: joinedUsername }];
@@ -428,8 +414,7 @@ export default function PlayerScreen({ route, navigation }) {
     };
 
     const handleUserLeft = ({ userId: leftUserId }) => {
-      console.log('User left:', leftUserId);
-      setPresentUsers((prev) => prev.filter(u => u.user_id !== leftUserId));
+      setPresentUsers((prev) => prev.filter((u) => u.user_id !== leftUserId));
     };
 
     annotationSyncService.on('sync_response', handleSyncResponse);
@@ -442,7 +427,6 @@ export default function PlayerScreen({ route, navigation }) {
     annotationSyncService.on('user_left', handleUserLeft);
     annotationSyncService.on('error', handleError);
 
-    // Cleanup
     return () => {
       annotationSyncService.off('sync_response', handleSyncResponse);
       annotationSyncService.off('annotation_added', handleAnnotationAdded);
@@ -456,28 +440,28 @@ export default function PlayerScreen({ route, navigation }) {
       annotationSyncService.disconnect();
     };
   }, [apiBaseUrl, jobId, userId, username]);
+
   useEffect(() => {
-    console.log('camera effect running', { platform: Platform.OS, nodEnabled });
     if (Platform.OS !== 'web') return;
-  
+
     let cancelled = false;
-  
+
     const stopCamera = () => {
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
         animationFrameRef.current = null;
       }
-  
+
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
         streamRef.current = null;
       }
-  
+
       if (videoRef.current) {
         videoRef.current.pause?.();
         videoRef.current.srcObject = null;
       }
-  
+
       faceLandmarkerRef.current?.close?.();
       faceLandmarkerRef.current = null;
       setCameraEnabled(false);
@@ -523,25 +507,18 @@ export default function PlayerScreen({ route, navigation }) {
       });
 
     const getCameraErrorMessage = (err) => {
-      if (
-        typeof window !== 'undefined' &&
-        !window.isSecureContext
-      ) {
+      if (typeof window !== 'undefined' && !window.isSecureContext) {
         return 'Camera access on iPad Safari requires HTTPS or localhost. Open this page over HTTPS to use nod detection.';
       }
-
       if (err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError') {
         return 'Camera permission was denied. Allow camera access in Safari and try again.';
       }
-
       if (err?.name === 'NotFoundError' || err?.name === 'DevicesNotFoundError') {
         return 'No front camera was found for nod detection.';
       }
-
       if (err?.name === 'NotReadableError' || err?.name === 'TrackStartError') {
         return 'The camera is already in use by another app or tab.';
       }
-
       return err?.message || 'Unable to start the camera for nod detection.';
     };
 
@@ -565,11 +542,10 @@ export default function PlayerScreen({ route, navigation }) {
             audio: false,
           });
         }
-
         throw error;
       }
     };
-  
+
     const startCameraAndTracking = async () => {
       if (!nodEnabled) {
         setCameraError(null);
@@ -578,14 +554,6 @@ export default function PlayerScreen({ route, navigation }) {
       }
 
       setCameraError(null);
-      console.log('startCameraAndTracking called', {
-        platform: Platform.OS,
-        isWeb: Platform.OS === 'web',
-        hasNavigator: typeof navigator !== 'undefined',
-        hasMediaDevices: typeof navigator !== 'undefined' && !!navigator.mediaDevices,
-        hasGetUserMedia: typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia,
-        isSecureContext: typeof window !== 'undefined' ? window.isSecureContext : 'N/A',
-      });
 
       if (!navigator.mediaDevices?.getUserMedia) {
         setCameraError('This browser does not support camera access for nod detection.');
@@ -601,20 +569,12 @@ export default function PlayerScreen({ route, navigation }) {
         return;
       }
 
-      console.log('about to request camera');
       try {
         const stream = await requestCameraStream();
-        console.log('camera stream obtained', {
-          streamId: stream.id,
-          tracks: stream.getTracks().length,
-          videoTracks: stream.getVideoTracks().length,
-        });
-        console.log('loading mediapipe vision tasks...');
         setDebugInfo('Loading AI model...');
         const vision = await FilesetResolver.forVisionTasks(
           `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MEDIAPIPE_VERSION}/wasm`
         );
-        console.log('vision tasks loaded, creating face landmarker...');
         setDebugInfo('Creating face detector...');
 
         const faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
@@ -629,21 +589,18 @@ export default function PlayerScreen({ route, navigation }) {
           minFacePresenceConfidence: 0.5,
           minTrackingConfidence: 0.5,
         });
-        console.log('face landmarker created successfully');
-        setDebugInfo('Face detector ready!');
 
         faceLandmarkerRef.current = faceLandmarker;
-  
+
         if (cancelled) {
           stream.getTracks().forEach((track) => track.stop());
           faceLandmarker.close?.();
           return;
         }
-  
+
         streamRef.current = stream;
-  
+
         if (videoRef.current) {
-          console.log('setting up video element...');
           videoRef.current.muted = true;
           videoRef.current.autoplay = true;
           videoRef.current.playsInline = true;
@@ -652,74 +609,40 @@ export default function PlayerScreen({ route, navigation }) {
           videoRef.current.setAttribute('playsinline', 'true');
           videoRef.current.setAttribute('webkit-playsinline', 'true');
           videoRef.current.srcObject = stream;
-          console.log('calling play on video element...');
           await videoRef.current.play();
-          console.log('waiting for video to be ready...');
           await waitForVideoReady(videoRef.current);
-          console.log('video is ready!', {
-            width: videoRef.current.videoWidth,
-            height: videoRef.current.videoHeight,
-            readyState: videoRef.current.readyState,
-          });
         }
 
         if (cancelled) return;
 
         setCameraEnabled(true);
-        console.log('camera enabled, starting detection loop');
-  
-        let frameCount = 0;
+
         const detectFrame = () => {
-          frameCount++;
-
           if (cancelled) {
-            console.log('detectFrame: cancelled');
             return;
           }
 
-          if (!videoRef.current) {
-            console.log('detectFrame: no videoRef');
-            animationFrameRef.current = requestAnimationFrame(detectFrame);
-            return;
-          }
-
-          if (!faceLandmarkerRef.current) {
-            console.log('detectFrame: no faceLandmarker');
+          if (!videoRef.current || !faceLandmarkerRef.current) {
             animationFrameRef.current = requestAnimationFrame(detectFrame);
             return;
           }
 
           if (videoRef.current.readyState < 2) {
-            if (frameCount % 30 === 0) { // Log every 30 frames
-              console.log('detectFrame: video not ready', videoRef.current.readyState);
-            }
             animationFrameRef.current = requestAnimationFrame(detectFrame);
             return;
           }
 
           let results;
           try {
-            results = faceLandmarkerRef.current.detectForVideo(
-              videoRef.current,
-              performance.now()
-            );
+            results = faceLandmarkerRef.current.detectForVideo(videoRef.current, performance.now());
           } catch (err) {
-            console.error('Error in detectForVideo:', err);
             setDebugInfo(`Error: ${err.message}`);
             animationFrameRef.current = requestAnimationFrame(detectFrame);
             return;
           }
 
-          if (frameCount % 30 === 0) { // Log every 30 frames (~1 second)
-            console.log('detection results:', {
-              hasFaceLandmarks: !!results.faceLandmarks,
-              numFaces: results.faceLandmarks?.length || 0,
-              frameCount,
-            });
-          }
-
           const face = results.faceLandmarks?.[0];
-  
+
           if (face) {
             const nose = face[1];
             const leftEye = face[33];
@@ -728,51 +651,43 @@ export default function PlayerScreen({ route, navigation }) {
             if (nose && leftEye && rightEye) {
               const eyeY = (leftEye.y + rightEye.y) / 2;
               const relativeY = nose.y - eyeY;
-              const delta = baselineRelativeYRef.current !== null
-                ? relativeY - baselineRelativeYRef.current
-                : 0;
+              const delta =
+                baselineRelativeYRef.current !== null ? relativeY - baselineRelativeYRef.current : 0;
 
-              console.log(
-                'face detected',
-                'noseY:', nose.y,
-                'leftEyeY:', leftEye.y,
-                'rightEyeY:', rightEye.y,
-                'eyeY:', eyeY
+              setDebugInfo(
+                `✓ Face detected\nPhase: ${nodPhaseRef.current}\nDelta: ${delta.toFixed(
+                  4
+                )}\nBaseline: ${baselineRelativeYRef.current?.toFixed(4) || 'null'}`
               );
-
-              // Update debug overlay
-              setDebugInfo(`✓ Face detected\nPhase: ${nodPhaseRef.current}\nDelta: ${delta.toFixed(4)}\nBaseline: ${baselineRelativeYRef.current?.toFixed(4) || 'null'}`);
 
               handleNodDetection(nose.y, eyeY);
             } else {
               setDebugInfo('✓ Face detected (missing landmarks)');
             }
           } else {
-            if (frameCount % 15 === 0) { // Update every 15 frames
-              setDebugInfo('✗ No face detected\nCheck lighting & position');
-            }
+            setDebugInfo('✗ No face detected\nCheck lighting & position');
           }
-  
+
           animationFrameRef.current = requestAnimationFrame(detectFrame);
         };
-  
+
         detectFrame();
       } catch (err) {
-        console.error('Camera / face tracking error:', err?.name, err?.message, err);
         if (!cancelled) {
           setCameraError(getCameraErrorMessage(err));
         }
         stopCamera();
       }
     };
-  
+
     startCameraAndTracking();
-  
+
     return () => {
       cancelled = true;
       stopCamera();
     };
   }, [nodEnabled]);
+
   useEffect(() => {
     let objectUrl = null;
 
@@ -824,6 +739,7 @@ export default function PlayerScreen({ route, navigation }) {
     });
     setCurrentPage(pageIndex);
   };
+
   const handleNodDetection = (noseY, eyeY) => {
     const relativeY = noseY - eyeY;
     const now = Date.now();
@@ -835,15 +751,6 @@ export default function PlayerScreen({ route, navigation }) {
     }
 
     const delta = relativeY - baselineRelativeYRef.current;
-
-    console.log(
-      'nod check',
-      'relativeY:', relativeY,
-      'baseline:', baselineRelativeYRef.current,
-      'delta:', delta,
-      'nodPhase:', nodPhaseRef.current,
-      'lastTurnTime:', lastTurnTimeRef.current
-    );
 
     if (now - lastTurnTimeRef.current < cooldownMs) {
       return;
@@ -866,13 +773,13 @@ export default function PlayerScreen({ route, navigation }) {
     baselineRelativeYRef.current =
       baselineRelativeYRef.current * baselineSmoothing + relativeY * (1 - baselineSmoothing);
   };
+
   const onMomentumScrollEnd = (event) => {
     const nextPage = Math.round(event.nativeEvent.contentOffset.x / width);
     setCurrentPage(nextPage);
   };
 
   const onScroll = (event) => {
-    // For web compatibility, update page number on scroll as well
     if (Platform.OS === 'web') {
       const nextPage = Math.round(event.nativeEvent.contentOffset.x / width);
       if (nextPage !== currentPage) {
@@ -886,10 +793,7 @@ export default function PlayerScreen({ route, navigation }) {
       return;
     }
 
-    const effectiveTimeSeconds = Math.max(
-      0,
-      timeSeconds + PLAYBACK_HIGHLIGHT_LEAD_SECONDS
-    );
+    const effectiveTimeSeconds = Math.max(0, timeSeconds + PLAYBACK_HIGHLIGHT_LEAD_SECONDS);
 
     let nextIndex = 0;
     for (let index = 0; index < alignmentMappings.length; index += 1) {
@@ -907,16 +811,28 @@ export default function PlayerScreen({ route, navigation }) {
 
     const exactMeasureRegion =
       nextMeasureIndex !== null ? measureRegionLookup.get(Number(nextMeasureIndex)) : null;
-    if (exactMeasureRegion && exactMeasureRegion.pageIndex !== currentPageRef.current) {
+
+    if (
+      pageTurnMode === 'auto' &&
+      exactMeasureRegion &&
+      exactMeasureRegion.pageIndex !== currentPageRef.current
+    ) {
       goToPage(exactMeasureRegion.pageIndex);
       return;
     }
 
     const nextPageIndex = measurePageRanges.findIndex(
-      (range) => nextMeasure !== null && nextMeasure >= range.startMeasure && nextMeasure <= range.endMeasure
+      (range) =>
+        nextMeasure !== null &&
+        nextMeasure >= range.startMeasure &&
+        nextMeasure <= range.endMeasure
     );
 
-    if (nextPageIndex !== -1 && nextPageIndex !== currentPageRef.current) {
+    if (
+      pageTurnMode === 'auto' &&
+      nextPageIndex !== -1 &&
+      nextPageIndex !== currentPageRef.current
+    ) {
       goToPage(nextPageIndex);
     }
   };
@@ -985,7 +901,7 @@ export default function PlayerScreen({ route, navigation }) {
 
     try {
       audioElement.currentTime = Math.max(0, targetTime);
-    } catch (seekError) {
+    } catch {
       return;
     }
 
@@ -1027,75 +943,53 @@ export default function PlayerScreen({ route, navigation }) {
         webAudioRef.current.pause();
       }
     } catch (playbackError) {
-      setAudioError(
-        playbackError?.message || 'Unable to start playback. Try pressing play again.'
-      );
+      setAudioError(playbackError?.message || 'Unable to start playback. Try pressing play again.');
       setIsPlaying(false);
     }
   };
 
-  // Annotation handlers
   const handleAnnotationCreated = (annotation) => {
-    // If this is a final annotation (after live updates), replace the temporary one
     if (annotation._isFinal) {
-      // Send final version to server
       annotationSyncService.addAnnotation(annotation);
-
-      // Replace temporary with final in local state
       setAnnotations((prev) => {
         const withoutTemp = prev.filter((a) => a.id !== annotation.id);
         return [...withoutTemp, annotation];
       });
     } else {
-      // Regular annotation creation (no live updates)
       annotationSyncService.addAnnotation(annotation);
       setAnnotations((prev) => [...prev, annotation]);
     }
   };
 
   const handleAnnotationUpdated = (annotation) => {
-    // Check if this is a deletion (marked with _deleted flag)
     if (annotation._deleted) {
       annotationSyncService.deleteAnnotation(annotation.id);
       setAnnotations((prev) => prev.filter((a) => a.id !== annotation.id));
     } else if (annotation._isTemp) {
-      // This is a temporary live update - send to WebSocket but handle locally
       annotationSyncService.updateAnnotation(annotation);
-
-      // Add or update in local state
       setAnnotations((prev) => {
         const exists = prev.some((a) => a.id === annotation.id);
         if (exists) {
           return prev.map((a) => (a.id === annotation.id ? annotation : a));
-        } else {
-          return [...prev, annotation];
         }
+        return [...prev, annotation];
       });
     } else {
-      // Regular update
       annotationSyncService.updateAnnotation(annotation);
-      setAnnotations((prev) =>
-        prev.map((a) => (a.id === annotation.id ? annotation : a))
-      );
+      setAnnotations((prev) => prev.map((a) => (a.id === annotation.id ? annotation : a)));
     }
   };
 
   const handleClearAllAnnotations = () => {
-    // Delete all annotations for current page
-    const pageAnnotations = annotations.filter(
-      (ann) => ann.page_number === currentPage + 1
-    );
+    const pageAnnotations = annotations.filter((ann) => ann.page_number === currentPage + 1);
 
     pageAnnotations.forEach((ann) => {
       annotationSyncService.deleteAnnotation(ann.id);
     });
 
-    setAnnotations((prev) =>
-      prev.filter((ann) => ann.page_number !== currentPage + 1)
-    );
+    setAnnotations((prev) => prev.filter((ann) => ann.page_number !== currentPage + 1));
   };
 
-  // Load share code on mount
   useEffect(() => {
     const loadShareCode = async () => {
       if (!jobId) {
@@ -1126,11 +1020,10 @@ export default function PlayerScreen({ route, navigation }) {
       try {
         await navigator.clipboard.writeText(shareCode);
         alert('Share code copied to clipboard!');
-      } catch (error) {
+      } catch {
         alert('Failed to copy to clipboard');
       }
     } else {
-      // For native platforms, you'd use Clipboard from @react-native-clipboard/clipboard
       alert(`Share code: ${shareCode}`);
     }
   };
@@ -1166,6 +1059,25 @@ export default function PlayerScreen({ route, navigation }) {
     }
   };
 
+  const handleSelectPageTurnMode = (mode) => {
+    setPageTurnMode(mode);
+    setShowPageTurnMenu(false);
+    setCameraError(null);
+  };
+
+  const getPageTurnLabel = () => {
+    switch (pageTurnMode) {
+      case 'nod':
+        return 'Page Turn: Nod';
+      case 'tap':
+        return 'Page Turn: Tap';
+      case 'auto':
+        return 'Page Turn: Auto';
+      default:
+        return 'Page Turn';
+    }
+  };
+
   if (!fontsLoaded) {
     return null;
   }
@@ -1197,30 +1109,18 @@ export default function PlayerScreen({ route, navigation }) {
   return (
     <SafeAreaView
       style={styles.container}
-      onStartShouldSetResponder={(event) => {
-        // Check if the touch target is within the visibility dropdown
-        const target = event.target;
-        let isDropdownClick = false;
-
-        // Walk up the DOM tree to check if we're inside the dropdown
-        let currentElement = target;
-        while (currentElement) {
-          if (currentElement.className &&
-              (String(currentElement.className).includes('visibilityDropdown') ||
-               String(currentElement.className).includes('visibilityRow'))) {
-            isDropdownClick = true;
-            break;
-          }
-          currentElement = currentElement.parentElement;
-        }
-
+      onStartShouldSetResponder={() => {
         let shouldCapture = false;
         if (selectedPresenceUser) {
           setSelectedPresenceUser(null);
           shouldCapture = true;
         }
-        if (showUserVisibilityDropdown && !isDropdownClick) {
+        if (showUserVisibilityDropdown) {
           setShowUserVisibilityDropdown(false);
+          shouldCapture = true;
+        }
+        if (showPageTurnMenu) {
+          setShowPageTurnMenu(false);
           shouldCapture = true;
         }
         return shouldCapture;
@@ -1232,11 +1132,14 @@ export default function PlayerScreen({ route, navigation }) {
           autoPlay
           playsInline
           muted
-          style={config.nodDetection.showCameraPreview && nodEnabled && cameraEnabled ? styles.cameraPreview : styles.hiddenCameraVideo}
+          style={
+            config.nodDetection.showCameraPreview && nodEnabled && cameraEnabled
+              ? styles.cameraPreview
+              : styles.hiddenCameraVideo
+          }
         />
       ) : null}
 
-      {/* Hidden audio element */}
       {Platform.OS === 'web' && playbackUrl ? (
         <audio
           ref={webAudioRef}
@@ -1268,13 +1171,14 @@ export default function PlayerScreen({ route, navigation }) {
         />
       ) : null}
 
-      {/* Compact Header with Back Button, Title, Edit, Play, and Share */}
       <View style={styles.compactHeader}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
           <FontAwesomeIcon icon={faArrowLeft} size={20} color={COLORS.beige} />
         </TouchableOpacity>
         <View style={styles.titleSection}>
-          <Text style={styles.compactTitle} numberOfLines={1}>{title}</Text>
+          <Text style={styles.compactTitle} numberOfLines={1}>
+            {title}
+          </Text>
           <TouchableOpacity onPress={handleRename} style={styles.editButton}>
             <FontAwesomeIcon icon={faEdit} size={16} color={COLORS.darkBrown} />
           </TouchableOpacity>
@@ -1282,27 +1186,26 @@ export default function PlayerScreen({ route, navigation }) {
         <View style={styles.headerActions}>
           {presentUsers.length > 0 && (
             <View style={styles.presenceContainer}>
-              {presentUsers.map((user, index) => (
-                <TouchableOpacity
-                  key={user.user_id}
-                  style={styles.presenceAvatar}
-                  onPress={(event) => {
-                    if (selectedPresenceUser === user.user_id) {
-                      setSelectedPresenceUser(null);
-                    } else {
-                      setSelectedPresenceUser(user.user_id);
-                      // Calculate position based on avatar index
-                      // Each avatar is 32px wide + 6px gap
-                      const baseOffset = shareCode ? 280 : 20;
-                      const avatarOffset = index * (32 + 6);
-                      setPresenceTooltipPosition({ x: baseOffset + avatarOffset + 16, index });
+              {presentUsers.map((user) => (
+                <View key={user.user_id} style={styles.presenceWrapper}>
+                  <TouchableOpacity
+                    style={styles.presenceAvatar}
+                    onPress={() =>
+                      setSelectedPresenceUser(
+                        selectedPresenceUser === user.user_id ? null : user.user_id
+                      )
                     }
-                  }}
-                >
-                  <Text style={styles.presenceAvatarText}>
-                    {user.username?.charAt(0).toUpperCase() || '?'}
-                  </Text>
-                </TouchableOpacity>
+                  >
+                    <Text style={styles.presenceAvatarText}>
+                      {user.username?.charAt(0).toUpperCase() || '?'}
+                    </Text>
+                  </TouchableOpacity>
+                  {selectedPresenceUser === user.user_id && (
+                    <View style={styles.presenceTooltip}>
+                      <Text style={styles.presenceTooltipText}>{user.username}</Text>
+                    </View>
+                  )}
+                </View>
               ))}
             </View>
           )}
@@ -1318,25 +1221,6 @@ export default function PlayerScreen({ route, navigation }) {
         </View>
       </View>
 
-      {/* Presence Tooltip Overlay - rendered separately for proper z-index */}
-      {selectedPresenceUser && (
-        <View
-          style={[
-            styles.presenceTooltipOverlay,
-            {
-              right: width - presenceTooltipPosition.x,
-              top: 72,
-            }
-          ]}
-          pointerEvents="none"
-        >
-          <Text style={styles.presenceTooltipText}>
-            {presentUsers.find(u => u.user_id === selectedPresenceUser)?.username}
-          </Text>
-        </View>
-      )}
-
-      {/* Annotation Toolbar */}
       <View style={styles.toolbarRow}>
         <TouchableOpacity
           style={[styles.compactPlayButton, !audioUrl && styles.compactPlayButtonDisabled]}
@@ -1381,41 +1265,86 @@ export default function PlayerScreen({ route, navigation }) {
         />
 
         <View style={styles.rightButtons}>
-          <TouchableOpacity
-            style={[styles.gestureButton, nodEnabled && styles.gestureButtonActive]}
-            onPress={() => {
-              console.log('nod button clicked');
-              if (Platform.OS !== 'web') {
-                setCameraError(
-                  'Nod detection currently uses the web camera pipeline. Open the score in Safari over HTTPS on iPad to use the front camera.'
-                );
-                return;
-              }
-
-              setCameraError(null);
-              setNodEnabled(!nodEnabled);
-            }}          >
-            <Text
+          <View style={styles.pageTurnMenuWrapper}>
+            <TouchableOpacity
               style={[
-                styles.gestureButtonText,
-                nodEnabled && styles.gestureButtonTextActive
+                styles.gestureButton,
+                pageTurnMode !== 'manual' && styles.gestureButtonActive,
               ]}
+              onPress={() => setShowPageTurnMenu((prev) => !prev)}
             >
-              Nod to Turn Page
-            </Text>
-          </TouchableOpacity>
+              <Text
+                style={[
+                  styles.gestureButtonText,
+                  pageTurnMode !== 'manual' && styles.gestureButtonTextActive,
+                ]}
+              >
+                {getPageTurnLabel()}
+              </Text>
+              <View style={styles.pageTurnChevron}>
+                <FontAwesomeIcon
+                  icon={faChevronDown}
+                  size={12}
+                  color={pageTurnMode !== 'manual' ? COLORS.beige : COLORS.darkBrown}
+                />
+              </View>
+            </TouchableOpacity>
+
+            {showPageTurnMenu ? (
+              <View style={styles.pageTurnDropdown}>
+                <TouchableOpacity
+                  style={styles.pageTurnDropdownItem}
+                  onPress={() => handleSelectPageTurnMode('manual')}
+                >
+                  <Text style={styles.pageTurnDropdownText}>Manual only</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.pageTurnDropdownItem}
+                  onPress={() => {
+                    if (Platform.OS !== 'web') {
+                      setCameraError(
+                        'Nod detection currently uses the web camera pipeline. Open the score in Safari over HTTPS on iPad to use the front camera.'
+                      );
+                    }
+                    handleSelectPageTurnMode('nod');
+                  }}
+                >
+                  <Text style={styles.pageTurnDropdownText}>Nod</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.pageTurnDropdownItem}
+                  onPress={() => handleSelectPageTurnMode('tap')}
+                >
+                  <Text style={styles.pageTurnDropdownText}>Tap page edges</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.pageTurnDropdownItem}
+                  onPress={() => handleSelectPageTurnMode('auto')}
+                >
+                  <Text style={styles.pageTurnDropdownText}>Auto during playback</Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
+          </View>
         </View>
       </View>
 
-      {(cameraError || (nodEnabled && !cameraEnabled) || (nodEnabled && config.nodDetection.showDebug && debugInfo)) ? (
+      {(audioError ||
+        cameraError ||
+        (nodEnabled && !cameraEnabled) ||
+        (nodEnabled && config.nodDetection.showDebug && debugInfo)) ? (
         <View style={styles.cameraStatusRow}>
-          <Text style={styles.cameraStatusText}>
-            {cameraError || (nodEnabled && !cameraEnabled ? 'Starting front camera for nod detection...' : '')}
-          </Text>
-          {nodEnabled && cameraEnabled && config.nodDetection.showDebug && debugInfo ? (
-            <Text style={[styles.cameraStatusText, { fontFamily: 'Courier', fontSize: 12, marginTop: 4 }]}>
-              {debugInfo}
+          {audioError ? <Text style={styles.cameraStatusText}>{audioError}</Text> : null}
+          {cameraError || (nodEnabled && !cameraEnabled) ? (
+            <Text style={styles.cameraStatusText}>
+              {cameraError || 'Starting front camera for nod detection...'}
             </Text>
+          ) : null}
+          {nodEnabled && cameraEnabled && config.nodDetection.showDebug && debugInfo ? (
+            <Text style={[styles.cameraStatusText, styles.debugText]}>{debugInfo}</Text>
           ) : null}
         </View>
       ) : null}
@@ -1433,10 +1362,11 @@ export default function PlayerScreen({ route, navigation }) {
         scrollEnabled={!annotationsEnabled}
       >
         {pages.map((item) => {
-          // Use full available space now that labels are removed
           const containerWidth = width - pageHorizontalPadding * 2;
           const containerHeight = availablePageHeight;
-          const isSvgPage = String(item.image_path || item.uri || '').toLowerCase().includes('.svg');
+          const isSvgPage = String(item.image_path || item.uri || '')
+            .toLowerCase()
+            .includes('.svg');
 
           const imageWidth = item.width || 1240;
           const imageHeight = item.height || 1754;
@@ -1467,7 +1397,7 @@ export default function PlayerScreen({ route, navigation }) {
                     padding: 0,
                   },
                 ]}
-                >
+              >
                 {(() => {
                   const activeMeasureRegion =
                     activeMeasureIndex !== null
@@ -1479,6 +1409,7 @@ export default function PlayerScreen({ route, navigation }) {
                           return Number(region.measure) === Number(activeMeasure);
                         })
                       : null;
+
                   const range = measurePageRanges[item.page_number - 1];
                   const isActiveRange =
                     !activeMeasureRegion &&
@@ -1611,7 +1542,21 @@ export default function PlayerScreen({ route, navigation }) {
                           </View>
                         ) : null}
 
-                        {/* Annotation Layer */}
+                        {pageTurnMode === 'tap' && !annotationsEnabled ? (
+                          <View pointerEvents="box-none" style={styles.tapTurnOverlay}>
+                            <Pressable
+                              style={[styles.tapTurnZone, styles.tapTurnZoneLeft]}
+                              onPress={() => goToPage(currentPageRef.current - 1)}
+                              disabled={currentPageRef.current === 0}
+                            />
+                            <Pressable
+                              style={[styles.tapTurnZone, styles.tapTurnZoneRight]}
+                              onPress={() => goToPage(currentPageRef.current + 1)}
+                              disabled={currentPageRef.current >= pages.length - 1}
+                            />
+                          </View>
+                        ) : null}
+
                         <AnnotationLayer
                           pageNumber={item.page_number}
                           width={containerWidth}
@@ -1741,14 +1686,6 @@ const styles = StyleSheet.create({
   compactPlayButtonDisabled: {
     opacity: 0.5,
   },
-  compactShareButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: COLORS.beige,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   shareCodeContainer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1778,6 +1715,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
   },
+  presenceWrapper: {
+    position: 'relative',
+  },
   presenceAvatar: {
     width: 32,
     height: 32,
@@ -1794,23 +1734,23 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: COLORS.beige,
   },
-  presenceTooltipOverlay: {
+  presenceTooltip: {
     position: 'absolute',
+    top: 38,
+    left: '50%',
     backgroundColor: COLORS.darkBrown,
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 6,
-    zIndex: 999999,
+    zIndex: 1000,
     minWidth: 80,
     alignItems: 'center',
-    elevation: 999,
     transform: [{ translateX: -40 }],
   },
   presenceTooltipText: {
     fontFamily: 'Afacad_400Regular',
     fontSize: 13,
     color: COLORS.beige,
-    whiteSpace: 'nowrap',
   },
   hiddenCameraVideo: {
     position: 'absolute',
@@ -1828,10 +1768,10 @@ const styles = StyleSheet.create({
     width: 160,
     height: 120,
     borderRadius: 12,
-    border: '3px solid #58392F',
     zIndex: 1000,
-    transform: 'scaleX(-1)', // Mirror the video
-    boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+    transform: [{ scaleX: -1 }],
+    borderWidth: 3,
+    borderColor: COLORS.darkBrown,
   },
   pageList: {
     flex: 1,
@@ -1854,18 +1794,6 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-start',
     alignItems: 'center',
     padding: 14,
-  },
-  pageLabel: {
-    fontFamily: 'Afacad_400Regular',
-    fontSize: 18,
-    color: COLORS.lightBrown,
-    marginBottom: 10,
-  },
-  measureRangeLabel: {
-    fontFamily: 'Afacad_400Regular',
-    fontSize: 15,
-    color: COLORS.darkBrown,
-    marginBottom: 8,
   },
   measureOverlay: {
     position: 'absolute',
@@ -1895,6 +1823,21 @@ const styles = StyleSheet.create({
   measureHitArea: {
     position: 'absolute',
     backgroundColor: 'transparent',
+  },
+  tapTurnOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 4,
+    flexDirection: 'row',
+  },
+  tapTurnZone: {
+    height: '100%',
+  },
+  tapTurnZoneLeft: {
+    width: '22%',
+  },
+  tapTurnZoneRight: {
+    width: '22%',
+    marginLeft: 'auto',
   },
   controlsContainer: {
     backgroundColor: COLORS.lightBrown,
@@ -1970,7 +1913,11 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: COLORS.darkBrown,
   },
-  
+  debugText: {
+    fontFamily: Platform.OS === 'web' ? 'monospace' : 'Courier',
+    fontSize: 12,
+    marginTop: 4,
+  },
   gestureButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1979,56 +1926,51 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 8,
   },
-  
   gestureButtonText: {
     fontFamily: 'Afacad_400Regular',
     fontSize: 16,
     color: COLORS.darkBrown,
   },
   gestureButtonActive: {
-    backgroundColor: COLORS.darkBrown,   
+    backgroundColor: COLORS.darkBrown,
   },
-  
   gestureButtonTextActive: {
     color: COLORS.beige,
-  },
-  debugButton: {
-    marginLeft: 8,
-    backgroundColor: COLORS.beige,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: 8,
-  },
-
-  debugButtonActive: {
-    backgroundColor: '#FFD60A',
-  },
-
-  debugButtonText: {
-    fontFamily: 'Afacad_400Regular',
-    fontSize: 14,
-    color: COLORS.darkBrown,
-  },
-
-  debugButtonTextActive: {
-    color: '#58392F',
-    fontWeight: 'bold',
-  },
-  testButton: {
-    marginLeft: 10,
-    backgroundColor: '#C8B8A6',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
-  },
-
-  testButtonText: {
-    fontFamily: 'Afacad_400Regular',
-    fontSize: 14,
-    color: '#58392F',
   },
   rightButtons: {
     flexDirection: 'row',
     alignItems: 'center',
+  },
+  pageTurnMenuWrapper: {
+    position: 'relative',
+  },
+  pageTurnChevron: {
+    marginLeft: 8,
+  },
+  pageTurnDropdown: {
+    position: 'absolute',
+    top: 46,
+    right: 0,
+    backgroundColor: COLORS.beige,
+    borderRadius: 12,
+    paddingVertical: 6,
+    minWidth: 190,
+    borderWidth: 1,
+    borderColor: '#E2D6C8',
+    zIndex: 20000,
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 8,
+  },
+  pageTurnDropdownItem: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  pageTurnDropdownText: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 16,
+    color: COLORS.darkBrown,
   },
 });
