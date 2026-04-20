@@ -48,6 +48,7 @@ export default function AnnotationToolbar({
   showUserVisibilityDropdown = false,
   onToggleDropdown = () => {},
   onToggleUserVisibility = () => {},
+  renderDropdownOutside = false,
 }) {
 
   // Get all unique users who have made annotations
@@ -87,6 +88,50 @@ export default function AnnotationToolbar({
   console.log('[AnnotationToolbar] Present users:', presentUsers);
   return (
     <View style={styles.container}>
+      {/* User Visibility Toggle - Before Enable/Disable */}
+      <View style={styles.visibilityContainer}>
+        <TouchableOpacity
+          style={styles.visibilityButton}
+          onPress={() => onToggleDropdown(!showUserVisibilityDropdown)}
+        >
+          <FontAwesomeIcon icon={faEye} size={16} color={COLORS.darkBrown} />
+          <Text style={styles.visibilityButtonText}>Users</Text>
+          <FontAwesomeIcon
+            icon={showUserVisibilityDropdown ? faChevronUp : faChevronDown}
+            size={12}
+            color={COLORS.darkBrown}
+          />
+        </TouchableOpacity>
+
+        {!renderDropdownOutside && showUserVisibilityDropdown && (
+          <View
+            style={styles.visibilityDropdown}
+            onStartShouldSetResponder={() => true}
+            onResponderRelease={(e) => e.stopPropagation()}
+          >
+            {usersWithAnnotations.length > 0 ? (
+              usersWithAnnotations.map((user) => (
+                <View key={user.user_id} style={styles.visibilityRow}>
+                  <Text style={styles.visibilityUsername}>
+                    {user.username}{user.isCurrentUser ? ' (Me)' : ''}
+                  </Text>
+                  <Switch
+                    value={!hiddenAnnotationUsers.has(user.user_id)}
+                    onValueChange={() => onToggleUserVisibility(user.user_id)}
+                    trackColor={{ false: COLORS.lightBrown, true: COLORS.darkBrown }}
+                    thumbColor={COLORS.beige}
+                  />
+                </View>
+              ))
+            ) : (
+              <View style={styles.visibilityRow}>
+                <Text style={styles.visibilityEmptyText}>No annotations yet</Text>
+              </View>
+            )}
+          </View>
+        )}
+      </View>
+
       {/* Enable/Disable Toggle */}
       <TouchableOpacity
         style={[styles.toolButton, enabled && styles.toolButtonActive]}
@@ -94,7 +139,7 @@ export default function AnnotationToolbar({
       >
         <FontAwesomeIcon
           icon={faPen}
-          size={20}
+          size={16}
           color={enabled ? COLORS.beige : COLORS.darkBrown}
         />
         <Text style={[styles.toolButtonText, enabled && styles.toolButtonTextActive]}>
@@ -184,55 +229,11 @@ export default function AnnotationToolbar({
 
           {/* Clear All */}
           <TouchableOpacity style={styles.clearButton} onPress={onClearAll}>
-            <FontAwesomeIcon icon={faTrash} size={18} color={COLORS.beige} />
+            <FontAwesomeIcon icon={faTrash} size={14} color={COLORS.beige} />
             <Text style={styles.clearButtonText}>Clear</Text>
           </TouchableOpacity>
         </>
       )}
-
-      {/* User Visibility Toggle - Always show */}
-      <View style={styles.visibilityContainer}>
-        <TouchableOpacity
-          style={styles.visibilityButton}
-          onPress={() => onToggleDropdown(!showUserVisibilityDropdown)}
-        >
-          <FontAwesomeIcon icon={faEye} size={16} color={COLORS.darkBrown} />
-          <Text style={styles.visibilityButtonText}>Users</Text>
-          <FontAwesomeIcon
-            icon={showUserVisibilityDropdown ? faChevronUp : faChevronDown}
-            size={12}
-            color={COLORS.darkBrown}
-          />
-        </TouchableOpacity>
-
-        {showUserVisibilityDropdown && (
-          <View
-            style={styles.visibilityDropdown}
-            onStartShouldSetResponder={() => true}
-            onResponderRelease={(e) => e.stopPropagation()}
-          >
-            {usersWithAnnotations.length > 0 ? (
-              usersWithAnnotations.map((user) => (
-                <View key={user.user_id} style={styles.visibilityRow}>
-                  <Text style={styles.visibilityUsername}>
-                    {user.username}{user.isCurrentUser ? ' (Me)' : ''}
-                  </Text>
-                  <Switch
-                    value={!hiddenAnnotationUsers.has(user.user_id)}
-                    onValueChange={() => onToggleUserVisibility(user.user_id)}
-                    trackColor={{ false: COLORS.lightBrown, true: COLORS.darkBrown }}
-                    thumbColor={COLORS.beige}
-                  />
-                </View>
-              ))
-            ) : (
-              <View style={styles.visibilityRow}>
-                <Text style={styles.visibilityEmptyText}>No annotations yet</Text>
-              </View>
-            )}
-          </View>
-        )}
-      </View>
     </View>
   );
 }
@@ -241,11 +242,7 @@ const styles = StyleSheet.create({
   container: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: COLORS.lightBrown,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
     gap: 12,
-    flexWrap: 'wrap',
   },
   toolButton: {
     flexDirection: 'row',
@@ -327,48 +324,50 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#D94848',
-    paddingHorizontal: 12,
+    paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 8,
-    gap: 6,
+    gap: 8,
+    height: 40,
   },
   clearButtonText: {
     fontFamily: 'Afacad_400Regular',
-    fontSize: 14,
+    fontSize: 16,
     color: COLORS.beige,
   },
   visibilityContainer: {
     position: 'relative',
-    zIndex: 9999,
+    zIndex: 20000,
+    elevation: 20000,
   },
   visibilityButton: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: COLORS.beige,
-    paddingHorizontal: 12,
+    paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 8,
-    gap: 6,
+    gap: 8,
   },
   visibilityButtonText: {
     fontFamily: 'Afacad_400Regular',
-    fontSize: 14,
+    fontSize: 16,
     color: COLORS.darkBrown,
   },
   visibilityDropdown: {
     position: 'absolute',
     top: 44,
-    right: 0,
+    left: 0,
     backgroundColor: COLORS.beige,
     borderRadius: 8,
     paddingVertical: 8,
     minWidth: 200,
-    zIndex: 9999,
+    zIndex: 30000,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.25,
     shadowRadius: 4,
-    elevation: 10,
+    elevation: 30000,
   },
   visibilityRow: {
     flexDirection: 'row',

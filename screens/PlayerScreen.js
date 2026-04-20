@@ -17,16 +17,13 @@ import { SvgUri, SvgXml } from 'react-native-svg';
 import { FontAwesomeIcon } from '@fortawesome/react-native-fontawesome';
 import {
   faArrowLeft,
-  faBackward,
   faChevronDown,
-  faChevronLeft,
-  faChevronRight,
   faCopy,
   faEdit,
-  faForward,
   faMusic,
   faPause,
   faPlay,
+  faShare,
 } from '@fortawesome/free-solid-svg-icons';
 import AnnotationLayer from '../components/AnnotationLayer';
 import AnnotationToolbar from '../components/AnnotationToolbar';
@@ -101,8 +98,8 @@ export default function PlayerScreen({ route, navigation }) {
   const isTabletLayout = width >= 900;
   const pageHorizontalPadding = isTabletLayout ? 56 : 20;
   const pageVerticalPadding = isTabletLayout ? 24 : 16;
-  const pageTopPadding = isTabletLayout ? 32 : 24;
-  const controlsHeight = isTabletLayout ? 70 : 60;
+  const pageTopPadding = isTabletLayout ? 48 : 40;
+  const controlsHeight = isTabletLayout ? 54 : 48;
   const compactHeaderHeight = 56;
   const toolbarHeight = 58;
   const availablePageHeight = Math.max(
@@ -1309,12 +1306,14 @@ export default function PlayerScreen({ route, navigation }) {
 
       <View style={styles.headerSeparator} />
 
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.toolbarScrollView}
-        contentContainerStyle={styles.toolbarScrollContent}
-      >
+      <View style={styles.toolbarWrapper}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.toolbarScrollView}
+          contentContainerStyle={styles.toolbarScrollContent}
+          nestedScrollEnabled={true}
+        >
         <View style={styles.toolbarRow}>
           <TouchableOpacity
             style={[styles.compactPlayButton, !audioUrl && styles.compactPlayButtonDisabled]}
@@ -1324,7 +1323,7 @@ export default function PlayerScreen({ route, navigation }) {
             <FontAwesomeIcon
               icon={isPlaying ? faPause : faPlay}
               size={16}
-              color={COLORS.beige}
+              color={COLORS.darkBrown}
             />
           </TouchableOpacity>
 
@@ -1334,78 +1333,11 @@ export default function PlayerScreen({ route, navigation }) {
               style={styles.motionButton}
               onPress={() => setShowBackwardMenu((prev) => !prev)}
             >
-              <FontAwesomeIcon icon={faChevronLeft} size={14} color={COLORS.darkBrown} />
+              <FontAwesomeIcon icon={faShare} size={16} color={COLORS.darkBrown} style={{ transform: [{ scaleX: -1 }] }} />
               <Text style={styles.motionButtonText}>{getMotionLabel(backwardMotion)}</Text>
-              <FontAwesomeIcon icon={faChevronDown} size={10} color={COLORS.darkBrown} />
+              <FontAwesomeIcon icon={faChevronDown} size={12} color={COLORS.darkBrown} />
             </TouchableOpacity>
 
-            {showBackwardMenu && (
-              <View style={styles.motionDropdown}>
-                <TouchableOpacity
-                  style={styles.motionDropdownItem}
-                  onPress={() => {
-                    setBackwardMotion('manual');
-                    setShowBackwardMenu(false);
-                  }}
-                >
-                  <Text style={styles.motionDropdownText}>Manual</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.motionDropdownItem}
-                  onPress={() => {
-                    setBackwardMotion('nod');
-                    setShowBackwardMenu(false);
-                  }}
-                >
-                  <Text style={styles.motionDropdownText}>Nod</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.motionDropdownItem}
-                  onPress={() => {
-                    setBackwardMotion('turn_left');
-                    setShowBackwardMenu(false);
-                  }}
-                >
-                  <Text style={styles.motionDropdownText}>Turn Left</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.motionDropdownItem}
-                  onPress={() => {
-                    setBackwardMotion('turn_right');
-                    setShowBackwardMenu(false);
-                  }}
-                >
-                  <Text style={styles.motionDropdownText}>Turn Right</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.motionDropdownItem}
-                  onPress={() => {
-                    setBackwardMotion('tilt_left');
-                    setShowBackwardMenu(false);
-                  }}
-                >
-                  <Text style={styles.motionDropdownText}>Tilt Left</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.motionDropdownItem}
-                  onPress={() => {
-                    setBackwardMotion('tilt_right');
-                    setShowBackwardMenu(false);
-                  }}
-                >
-                  <Text style={styles.motionDropdownText}>Tilt Right</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.motionDropdownItem}
-                  onPress={() => {
-                    setBackwardMotion('open_mouth');
-                    setShowBackwardMenu(false);
-                  }}
-                >
-                  <Text style={styles.motionDropdownText}>Open Mouth</Text>
-                </TouchableOpacity>
-              </View>
-            )}
           </View>
 
           {/* Forward Motion */}
@@ -1414,78 +1346,11 @@ export default function PlayerScreen({ route, navigation }) {
               style={styles.motionButton}
               onPress={() => setShowForwardMenu((prev) => !prev)}
             >
-              <FontAwesomeIcon icon={faChevronRight} size={14} color={COLORS.darkBrown} />
+              <FontAwesomeIcon icon={faShare} size={16} color={COLORS.darkBrown} />
               <Text style={styles.motionButtonText}>{getMotionLabel(forwardMotion)}</Text>
-              <FontAwesomeIcon icon={faChevronDown} size={10} color={COLORS.darkBrown} />
+              <FontAwesomeIcon icon={faChevronDown} size={12} color={COLORS.darkBrown} />
             </TouchableOpacity>
 
-            {showForwardMenu && (
-              <View style={styles.motionDropdown}>
-                <TouchableOpacity
-                  style={styles.motionDropdownItem}
-                  onPress={() => {
-                    setForwardMotion('manual');
-                    setShowForwardMenu(false);
-                  }}
-                >
-                  <Text style={styles.motionDropdownText}>Manual</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.motionDropdownItem}
-                  onPress={() => {
-                    setForwardMotion('nod');
-                    setShowForwardMenu(false);
-                  }}
-                >
-                  <Text style={styles.motionDropdownText}>Nod</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.motionDropdownItem}
-                  onPress={() => {
-                    setForwardMotion('turn_left');
-                    setShowForwardMenu(false);
-                  }}
-                >
-                  <Text style={styles.motionDropdownText}>Turn Left</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.motionDropdownItem}
-                  onPress={() => {
-                    setForwardMotion('turn_right');
-                    setShowForwardMenu(false);
-                  }}
-                >
-                  <Text style={styles.motionDropdownText}>Turn Right</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.motionDropdownItem}
-                  onPress={() => {
-                    setForwardMotion('tilt_left');
-                    setShowForwardMenu(false);
-                  }}
-                >
-                  <Text style={styles.motionDropdownText}>Tilt Left</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.motionDropdownItem}
-                  onPress={() => {
-                    setForwardMotion('tilt_right');
-                    setShowForwardMenu(false);
-                  }}
-                >
-                  <Text style={styles.motionDropdownText}>Tilt Right</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.motionDropdownItem}
-                  onPress={() => {
-                    setForwardMotion('open_mouth');
-                    setShowForwardMenu(false);
-                  }}
-                >
-                  <Text style={styles.motionDropdownText}>Open Mouth</Text>
-                </TouchableOpacity>
-              </View>
-            )}
           </View>
 
           <AnnotationToolbar
@@ -1520,6 +1385,144 @@ export default function PlayerScreen({ route, navigation }) {
         </View>
       </ScrollView>
 
+      {/* Render dropdowns outside ScrollView */}
+      {showBackwardMenu && (
+        <View style={[styles.motionDropdownAbsolute, { left: 88 }]}>
+          <TouchableOpacity
+            style={styles.motionDropdownItem}
+            onPress={() => {
+              setBackwardMotion('manual');
+              setShowBackwardMenu(false);
+            }}
+          >
+            <Text style={styles.motionDropdownText}>Manual</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.motionDropdownItem}
+            onPress={() => {
+              setBackwardMotion('nod');
+              setShowBackwardMenu(false);
+            }}
+          >
+            <Text style={styles.motionDropdownText}>Nod</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.motionDropdownItem}
+            onPress={() => {
+              setBackwardMotion('turn_left');
+              setShowBackwardMenu(false);
+            }}
+          >
+            <Text style={styles.motionDropdownText}>Turn Left</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.motionDropdownItem}
+            onPress={() => {
+              setBackwardMotion('turn_right');
+              setShowBackwardMenu(false);
+            }}
+          >
+            <Text style={styles.motionDropdownText}>Turn Right</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.motionDropdownItem}
+            onPress={() => {
+              setBackwardMotion('tilt_left');
+              setShowBackwardMenu(false);
+            }}
+          >
+            <Text style={styles.motionDropdownText}>Tilt Left</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.motionDropdownItem}
+            onPress={() => {
+              setBackwardMotion('tilt_right');
+              setShowBackwardMenu(false);
+            }}
+          >
+            <Text style={styles.motionDropdownText}>Tilt Right</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.motionDropdownItem}
+            onPress={() => {
+              setBackwardMotion('open_mouth');
+              setShowBackwardMenu(false);
+            }}
+          >
+            <Text style={styles.motionDropdownText}>Open Mouth</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {showForwardMenu && (
+        <View style={[styles.motionDropdownAbsolute, { left: 220 }]}>
+          <TouchableOpacity
+            style={styles.motionDropdownItem}
+            onPress={() => {
+              setForwardMotion('manual');
+              setShowForwardMenu(false);
+            }}
+          >
+            <Text style={styles.motionDropdownText}>Manual</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.motionDropdownItem}
+            onPress={() => {
+              setForwardMotion('nod');
+              setShowForwardMenu(false);
+            }}
+          >
+            <Text style={styles.motionDropdownText}>Nod</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.motionDropdownItem}
+            onPress={() => {
+              setForwardMotion('turn_left');
+              setShowForwardMenu(false);
+            }}
+          >
+            <Text style={styles.motionDropdownText}>Turn Left</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.motionDropdownItem}
+            onPress={() => {
+              setForwardMotion('turn_right');
+              setShowForwardMenu(false);
+            }}
+          >
+            <Text style={styles.motionDropdownText}>Turn Right</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.motionDropdownItem}
+            onPress={() => {
+              setForwardMotion('tilt_left');
+              setShowForwardMenu(false);
+            }}
+          >
+            <Text style={styles.motionDropdownText}>Tilt Left</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.motionDropdownItem}
+            onPress={() => {
+              setForwardMotion('tilt_right');
+              setShowForwardMenu(false);
+            }}
+          >
+            <Text style={styles.motionDropdownText}>Tilt Right</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.motionDropdownItem}
+            onPress={() => {
+              setForwardMotion('open_mouth');
+              setShowForwardMenu(false);
+            }}
+          >
+            <Text style={styles.motionDropdownText}>Open Mouth</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+      </View>
+
       {(audioError ||
         cameraError ||
         (nodEnabled && !cameraEnabled) ||
@@ -1537,18 +1540,19 @@ export default function PlayerScreen({ route, navigation }) {
         </View>
       ) : null}
 
-      <ScrollView
-        ref={scrollViewRef}
-        pagingEnabled
-        horizontal
-        style={styles.pageList}
-        contentContainerStyle={styles.pageListContent}
-        onScroll={onScroll}
-        scrollEventThrottle={16}
-        onMomentumScrollEnd={onMomentumScrollEnd}
-        showsHorizontalScrollIndicator={false}
-        scrollEnabled={!annotationsEnabled}
-      >
+      <View style={styles.musicContainer}>
+        <ScrollView
+          ref={scrollViewRef}
+          pagingEnabled
+          horizontal
+          style={styles.pageList}
+          contentContainerStyle={styles.pageListContent}
+          onScroll={onScroll}
+          scrollEventThrottle={16}
+          onMomentumScrollEnd={onMomentumScrollEnd}
+          showsHorizontalScrollIndicator={false}
+          scrollEnabled={!annotationsEnabled}
+        >
         {pages.map((item) => {
           const containerWidth = width - pageHorizontalPadding * 2;
           const containerHeight = availablePageHeight;
@@ -1773,6 +1777,7 @@ export default function PlayerScreen({ route, navigation }) {
           );
         })}
       </ScrollView>
+      </View>
 
       <View
         style={[
@@ -1792,7 +1797,7 @@ export default function PlayerScreen({ route, navigation }) {
           disabled={currentPage === 0}
           onPress={() => goToPage(currentPage - 1)}
         >
-          <FontAwesomeIcon icon={faBackward} size={20} color={COLORS.darkBrown} />
+          <FontAwesomeIcon icon={faShare} size={18} color={COLORS.darkBrown} style={{ transform: [{ scaleX: -1 }] }} />
         </TouchableOpacity>
 
         <View style={styles.pageInfo}>
@@ -1810,7 +1815,7 @@ export default function PlayerScreen({ route, navigation }) {
           disabled={currentPage >= pages.length - 1}
           onPress={() => goToPage(currentPage + 1)}
         >
-          <FontAwesomeIcon icon={faForward} size={20} color={COLORS.darkBrown} />
+          <FontAwesomeIcon icon={faShare} size={18} color={COLORS.darkBrown} />
         </TouchableOpacity>
       </View>
     </SafeAreaView>
@@ -1881,7 +1886,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: COLORS.darkBrown,
+    backgroundColor: COLORS.beige,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1977,6 +1982,10 @@ const styles = StyleSheet.create({
     borderWidth: 3,
     borderColor: COLORS.darkBrown,
   },
+  musicContainer: {
+    flex: 1,
+    zIndex: -1,
+  },
   pageList: {
     flex: 1,
   },
@@ -1991,14 +2000,9 @@ const styles = StyleSheet.create({
   pageCard: {
     position: 'relative',
     flex: 1,
-    backgroundColor: '#FFFDF8',
-    borderRadius: 16,
     overflow: 'visible',
-    borderWidth: 1,
-    borderColor: '#E2D6C8',
     justifyContent: 'flex-start',
     alignItems: 'center',
-    padding: 14,
   },
   measureOverlay: {
     position: 'absolute',
@@ -2048,23 +2052,23 @@ const styles = StyleSheet.create({
   controlsContainer: {
     backgroundColor: COLORS.lightBrown,
     paddingHorizontal: 24,
-    paddingVertical: 12,
+    paddingVertical: 8,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
   controlButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     backgroundColor: COLORS.beige,
     alignItems: 'center',
     justifyContent: 'center',
   },
   controlButtonTablet: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
   },
   disabledButton: {
     opacity: 0.45,
@@ -2098,20 +2102,29 @@ const styles = StyleSheet.create({
     marginTop: 10,
     textAlign: 'center',
   },
+  toolbarWrapper: {
+    backgroundColor: COLORS.lightBrown,
+    zIndex: 10000,
+    position: 'relative',
+    elevation: 10000,
+  },
   toolbarScrollView: {
     backgroundColor: COLORS.lightBrown,
     maxHeight: 70,
+    overflow: 'visible',
   },
   toolbarScrollContent: {
     paddingHorizontal: 20,
+    overflow: 'visible',
   },
   toolbarRow: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: 10,
     gap: 12,
-    zIndex: 100,
+    zIndex: 10000,
     overflow: 'visible',
+    elevation: 10000,
   },
   cameraStatusRow: {
     paddingHorizontal: 20,
@@ -2185,19 +2198,21 @@ const styles = StyleSheet.create({
   },
   motionMenuWrapper: {
     position: 'relative',
+    zIndex: 20000,
+    elevation: 20000,
   },
   motionButton: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: COLORS.beige,
-    paddingHorizontal: 10,
+    paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 8,
-    gap: 6,
+    gap: 8,
   },
   motionButtonText: {
     fontFamily: 'Afacad_400Regular',
-    fontSize: 14,
+    fontSize: 16,
     color: COLORS.darkBrown,
   },
   motionDropdown: {
@@ -2210,12 +2225,28 @@ const styles = StyleSheet.create({
     minWidth: 160,
     borderWidth: 1,
     borderColor: '#E2D6C8',
-    zIndex: 20000,
+    zIndex: 30000,
     shadowColor: '#000',
     shadowOpacity: 0.12,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 3 },
-    elevation: 8,
+    elevation: 30000,
+  },
+  motionDropdownAbsolute: {
+    position: 'absolute',
+    top: 114,
+    backgroundColor: COLORS.beige,
+    borderRadius: 8,
+    paddingVertical: 6,
+    minWidth: 160,
+    borderWidth: 1,
+    borderColor: '#E2D6C8',
+    zIndex: 99999,
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 99999,
   },
   motionDropdownItem: {
     paddingHorizontal: 12,
