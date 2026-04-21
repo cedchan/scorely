@@ -41,6 +41,14 @@ const COLORS = {
 
 const MEDIAPIPE_VERSION = '0.10.34';
 const PLAYBACK_HIGHLIGHT_LEAD_SECONDS = 0.18;
+const COMPACT_HEADER_HEIGHT = 64;
+const TOOLBAR_HEIGHT = 72;
+const TOOLBAR_HORIZONTAL_PADDING = 20;
+const TOOLBAR_VERTICAL_PADDING = 14;
+const TOOLBAR_CONTROL_SIZE = 44;
+const TOOLBAR_TEXT_SIZE = 16;
+const TOOLBAR_BUTTON_HORIZONTAL_PADDING = 10;
+const TOOLBAR_BUTTON_GAP = 6;
 
 export default function PlayerScreen({ route, navigation }) {
   const { width, height } = useWindowDimensions();
@@ -104,20 +112,16 @@ export default function PlayerScreen({ route, navigation }) {
 
   const isTabletLayout = width >= 900;
   const pageHorizontalPadding = isTabletLayout ? 56 : 20;
-  const pageVerticalPadding = isTabletLayout ? 24 : 16;
-  const pageTopPadding = isTabletLayout ? 48 : 40;
+  const pageVerticalInset = isTabletLayout ? 22 : 16;
+  const pageVerticalBias = isTabletLayout ? 18 : 12;
   const controlsHeight = isTabletLayout ? 54 : 48;
-  const compactHeaderHeight = 56;
-  const toolbarHeight = 58;
-
   const availablePageHeight = Math.max(
     320,
     height -
-      compactHeaderHeight -
-      toolbarHeight -
+      COMPACT_HEADER_HEIGHT -
+      TOOLBAR_HEIGHT -
       controlsHeight -
-      pageVerticalPadding -
-      pageTopPadding
+      pageVerticalInset * 2
   );
 
   const gestureDetectionEnabled =
@@ -1432,7 +1436,7 @@ export default function PlayerScreen({ route, navigation }) {
             {title}
           </Text>
           <TouchableOpacity onPress={handleRename} style={styles.editButtonNoBg}>
-            <FontAwesomeIcon icon={faEdit} size={16} color={COLORS.beige} />
+            <FontAwesomeIcon icon={faEdit} size={19} color={COLORS.beige} />
           </TouchableOpacity>
         </View>
 
@@ -1466,8 +1470,10 @@ export default function PlayerScreen({ route, navigation }) {
 
           {shareCode && (
             <View style={styles.shareCodeContainer}>
-              <Text style={styles.shareCodeLabel}>Share Code:</Text>
-              <Text style={styles.shareCodeText}>{shareCode}</Text>
+              <View style={styles.shareCodeTextGroup}>
+                <Text style={styles.shareCodeLabel}>Share Code:</Text>
+                <Text style={styles.shareCodeText}>{shareCode}</Text>
+              </View>
               <TouchableOpacity style={styles.copyButton} onPress={copyShareCode}>
                 <FontAwesomeIcon icon={faCopy} size={14} color={COLORS.darkBrown} />
               </TouchableOpacity>
@@ -1475,8 +1481,6 @@ export default function PlayerScreen({ route, navigation }) {
           )}
         </View>
       </View>
-
-      <View style={styles.headerSeparator} />
 
       <View style={styles.toolbarWrapper}>
         <View style={styles.toolbarRow}>
@@ -1622,25 +1626,31 @@ export default function PlayerScreen({ route, navigation }) {
 
             const imageWidth = item.width || 1240;
             const imageHeight = item.height || 1754;
-
             const scale = Math.min(containerWidth / imageWidth, containerHeight / imageHeight);
             const displayedWidth = imageWidth * scale;
             const displayedHeight = imageHeight * scale;
             const imageOffsetX = (containerWidth - displayedWidth) / 2;
-            const imageOffsetY = (containerHeight - displayedHeight) / 2;
+          const centeredImageOffsetY = (containerHeight - displayedHeight) / 2;
+          const imageOffsetY = Math.max(
+            0,
+            Math.min(
+              containerHeight - displayedHeight,
+              centeredImageOffsetY + pageVerticalBias
+            )
+          );
 
-            return (
-              <View
-                key={`${cacheToken}-${item.page_number}`}
-                style={[
-                  styles.pageWrapper,
-                  {
-                    width,
-                    paddingHorizontal: pageHorizontalPadding,
-                    paddingBottom: pageVerticalPadding,
-                  },
-                ]}
-              >
+          return (
+            <View
+              key={`${cacheToken}-${item.page_number}`}
+              style={[
+                styles.pageWrapper,
+                {
+                  width,
+                  paddingHorizontal: pageHorizontalPadding,
+                  paddingVertical: pageVerticalInset,
+                },
+              ]}
+            >
                 <View
                   style={[
                     styles.pageCard,
@@ -1901,54 +1911,57 @@ const styles = StyleSheet.create({
   compactHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: COLORS.lightBrown,
-    paddingHorizontal: 16,
-    paddingVertical: 24,
-    height: 72,
+    backgroundColor: COLORS.darkBrown,
+    paddingHorizontal: TOOLBAR_HORIZONTAL_PADDING,
+    paddingVertical: TOOLBAR_VERTICAL_PADDING,
+    minHeight: COMPACT_HEADER_HEIGHT,
     gap: 12,
     overflow: 'visible',
     zIndex: 10000,
   },
   backButton: {
-    width: 32,
-    height: 32,
+    width: TOOLBAR_CONTROL_SIZE,
+    height: TOOLBAR_CONTROL_SIZE,
     alignItems: 'center',
     justifyContent: 'center',
   },
   titleSection: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: 6,
     flexShrink: 1,
   },
   compactTitle: {
     fontFamily: 'Afacad_400Regular',
-    fontSize: 18,
+    fontSize: 21,
     color: COLORS.beige,
     flexShrink: 1,
   },
+  editButton: {
+    width: TOOLBAR_CONTROL_SIZE,
+    height: TOOLBAR_CONTROL_SIZE,
+    borderRadius: TOOLBAR_CONTROL_SIZE / 2,
+    backgroundColor: COLORS.beige,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   editButtonNoBg: {
-    width: 32,
-    height: 32,
+    width: TOOLBAR_CONTROL_SIZE,
+    height: TOOLBAR_CONTROL_SIZE,
     alignItems: 'center',
     justifyContent: 'center',
   },
   headerActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 12,
     marginLeft: 'auto',
     overflow: 'visible',
   },
-  headerSeparator: {
-    height: 1,
-    backgroundColor: COLORS.darkBrown,
-    opacity: 0.15,
-  },
   compactPlayButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: TOOLBAR_CONTROL_SIZE,
+    height: TOOLBAR_CONTROL_SIZE,
+    borderRadius: TOOLBAR_CONTROL_SIZE / 2,
     backgroundColor: COLORS.beige,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1959,26 +1972,35 @@ const styles = StyleSheet.create({
   shareCodeContainer: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: COLORS.beige,
-    borderRadius: 18,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    gap: 6,
+    height: TOOLBAR_CONTROL_SIZE,
+    borderRadius: 8,
+    paddingHorizontal: TOOLBAR_BUTTON_HORIZONTAL_PADDING,
+    paddingVertical: 0,
+    gap: 8,
+  },
+  shareCodeTextGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
   },
   shareCodeLabel: {
     fontFamily: 'Afacad_400Regular',
-    fontSize: 14,
+    fontSize: TOOLBAR_TEXT_SIZE,
     color: COLORS.lightBrown,
   },
   shareCodeText: {
     fontFamily: 'Afacad_400Regular',
-    fontSize: 16,
+    fontSize: TOOLBAR_TEXT_SIZE,
     fontWeight: '600',
     color: COLORS.darkBrown,
     letterSpacing: 0.5,
   },
   copyButton: {
-    padding: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   presenceContainer: {
     flexDirection: 'row',
@@ -1991,9 +2013,9 @@ const styles = StyleSheet.create({
     zIndex: 1000,
   },
   presenceAvatar: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: TOOLBAR_CONTROL_SIZE,
+    height: TOOLBAR_CONTROL_SIZE,
+    borderRadius: TOOLBAR_CONTROL_SIZE / 2,
     backgroundColor: COLORS.darkBrown,
     alignItems: 'center',
     justifyContent: 'center',
@@ -2002,7 +2024,7 @@ const styles = StyleSheet.create({
   },
   presenceAvatarText: {
     fontFamily: 'Afacad_400Regular',
-    fontSize: 14,
+    fontSize: TOOLBAR_TEXT_SIZE,
     fontWeight: '600',
     color: COLORS.beige,
   },
@@ -2121,17 +2143,17 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   controlButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
+    width: TOOLBAR_CONTROL_SIZE,
+    height: TOOLBAR_CONTROL_SIZE,
+    borderRadius: TOOLBAR_CONTROL_SIZE / 2,
     backgroundColor: COLORS.beige,
     alignItems: 'center',
     justifyContent: 'center',
   },
   controlButtonTablet: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+    width: TOOLBAR_CONTROL_SIZE,
+    height: TOOLBAR_CONTROL_SIZE,
+    borderRadius: TOOLBAR_CONTROL_SIZE / 2,
   },
   disabledButton: {
     opacity: 0.45,
@@ -2142,7 +2164,7 @@ const styles = StyleSheet.create({
   },
   pageInfoText: {
     fontFamily: 'Afacad_400Regular',
-    fontSize: 16,
+    fontSize: TOOLBAR_TEXT_SIZE,
     color: COLORS.beige,
   },
   loadingState: {
@@ -2170,13 +2192,21 @@ const styles = StyleSheet.create({
     zIndex: 10000,
     position: 'relative',
     elevation: 10000,
+  },
+  toolbarScrollView: {
+    backgroundColor: COLORS.lightBrown,
+    maxHeight: 84,
+    overflow: 'visible',
+  },
+  toolbarScrollContent: {
+    paddingHorizontal: TOOLBAR_HORIZONTAL_PADDING,
     overflow: 'visible',
   },
   toolbarRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 20,
+    paddingVertical: TOOLBAR_VERTICAL_PADDING,
+    paddingHorizontal: TOOLBAR_HORIZONTAL_PADDING,
     gap: 12,
     zIndex: 10000,
     overflow: 'visible',
@@ -2198,6 +2228,62 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 4,
   },
+  gestureButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.beige,
+    height: TOOLBAR_CONTROL_SIZE,
+    paddingHorizontal: TOOLBAR_BUTTON_HORIZONTAL_PADDING,
+    paddingVertical: 0,
+    borderRadius: 8,
+  },
+  gestureButtonText: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 16,
+    color: COLORS.darkBrown,
+  },
+  gestureButtonActive: {
+    backgroundColor: COLORS.darkBrown,
+  },
+  gestureButtonTextActive: {
+    color: COLORS.beige,
+  },
+  rightButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  pageTurnMenuWrapper: {
+    position: 'relative',
+  },
+  pageTurnChevron: {
+    marginLeft: 8,
+  },
+  pageTurnDropdown: {
+    position: 'absolute',
+    top: 46,
+    right: 0,
+    backgroundColor: COLORS.beige,
+    borderRadius: 12,
+    paddingVertical: 6,
+    minWidth: 190,
+    borderWidth: 1,
+    borderColor: '#E2D6C8',
+    zIndex: 20000,
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 8,
+  },
+  pageTurnDropdownItem: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  pageTurnDropdownText: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 16,
+    color: COLORS.darkBrown,
+  },
   motionMenuWrapper: {
     position: 'relative',
     zIndex: 20000,
@@ -2208,16 +2294,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: COLORS.beige,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: 10,
-    gap: 8,
-    borderWidth: 1,
-    borderColor: 'rgba(88,57,47,0.08)',
+    height: TOOLBAR_CONTROL_SIZE,
+    paddingHorizontal: TOOLBAR_BUTTON_HORIZONTAL_PADDING,
+    paddingVertical: 0,
+    borderRadius: 8,
+    gap: TOOLBAR_BUTTON_GAP,
   },
   motionButtonText: {
     fontFamily: 'Afacad_400Regular',
-    fontSize: 16,
+    fontSize: TOOLBAR_TEXT_SIZE,
     color: COLORS.darkBrown,
   },
   motionDropdown: {

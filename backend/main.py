@@ -48,6 +48,8 @@ CLOUD_DIR = BASE_DIR / "cloud"
 CLOUD_DIR.mkdir(exist_ok=True)
 SEED_LIBRARY_DIR = BASE_DIR / "seed_scores"
 SEED_LIBRARY_DIR.mkdir(exist_ok=True)
+SEED_LIBRARY_AUDIO_DIR = BASE_DIR / "seed_audio"
+SEED_LIBRARY_AUDIO_DIR.mkdir(exist_ok=True)
 HARDCODED_PDF_MXL_MAP = {
     "sample1.pdf": BASE_DIR / "uploads" / "sample1.mxl",
     "sample2.pdf": BASE_DIR / "uploads" / "sample2.mxl",
@@ -386,6 +388,14 @@ def list_seed_library_files(limit: int = 2) -> List[Path]:
     return seed_files[:limit]
 
 
+def get_seed_bundled_audio_paths(seed_file: Path) -> Dict[str, Path]:
+    """Return bundled audio asset paths for a seeded library score."""
+    return {
+        "full_audio": SEED_LIBRARY_AUDIO_DIR / f"{seed_file.stem}_full.mp3",
+        "full_midi": SEED_LIBRARY_AUDIO_DIR / f"{seed_file.stem}_full.mid",
+    }
+
+
 def register_seed_library_score(
     seed_file: Path, background_tasks: Optional[BackgroundTasks] = None
 ) -> LibraryScoreInfo:
@@ -400,6 +410,20 @@ def register_seed_library_score(
 
     manifest_path = job_dir / "manifest.json"
     audio_path = job_dir / f"{job_id}_full.mp3"
+    midi_path = job_dir / f"{job_id}_full.mid"
+    bundled_audio_paths = get_seed_bundled_audio_paths(seed_file)
+
+    bundled_full_audio = bundled_audio_paths["full_audio"]
+    bundled_full_midi = bundled_audio_paths["full_midi"]
+    if bundled_full_audio.exists() and (
+        not audio_path.exists() or bundled_full_audio.stat().st_mtime > audio_path.stat().st_mtime
+    ):
+        shutil.copy2(bundled_full_audio, audio_path)
+    if bundled_full_midi.exists() and (
+        not midi_path.exists() or bundled_full_midi.stat().st_mtime > midi_path.stat().st_mtime
+    ):
+        shutil.copy2(bundled_full_midi, midi_path)
+
     audio_completed = audio_path.exists()
     audio_status = existing_job.get("progress", {}).get("audio_conversion", "not_started")
     if audio_completed:
@@ -416,6 +440,7 @@ def register_seed_library_score(
         "files": {
             "musicxml": f"/api/download/{job_id}/{job_id}.mxl",
             "full_audio": f"/api/download/{job_id}/{audio_path.name}" if audio_completed else None,
+            "full_midi": f"/api/download/{job_id}/{midi_path.name}" if midi_path.exists() else None,
             "score_pages": f"/api/score-pages/{job_id}" if manifest_path.exists() else None,
             "parts": [],
         },

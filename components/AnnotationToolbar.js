@@ -29,6 +29,11 @@ const STROKE_WIDTHS = [
   { name: 'Medium', value: 4 },
   { name: 'Thick', value: 6 },
 ];
+const TOOLBAR_CONTROL_SIZE = 44;
+const TOOLBAR_TEXT_SIZE = 16;
+const TOOLBAR_BUTTON_HORIZONTAL_PADDING = 10;
+const TOOLBAR_BUTTON_GAP = 6;
+const TOOLBAR_COLOR_BUTTON_SIZE = 32;
 
 export default function AnnotationToolbar({
   currentTool,
@@ -248,17 +253,18 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: COLORS.beige,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
+    height: TOOLBAR_CONTROL_SIZE,
+    paddingHorizontal: TOOLBAR_BUTTON_HORIZONTAL_PADDING,
+    paddingVertical: 0,
     borderRadius: 8,
-    gap: 8,
+    gap: TOOLBAR_BUTTON_GAP,
   },
   toolButtonActive: {
     backgroundColor: COLORS.darkBrown,
   },
   toolButtonText: {
     fontFamily: 'Afacad_400Regular',
-    fontSize: 16,
+    fontSize: TOOLBAR_TEXT_SIZE,
     color: COLORS.darkBrown,
   },
   toolButtonTextActive: {
@@ -266,11 +272,11 @@ const styles = StyleSheet.create({
   },
   toolGroup: {
     flexDirection: 'row',
-    gap: 8,
+    gap: TOOLBAR_BUTTON_GAP,
   },
   iconButton: {
-    width: 40,
-    height: 40,
+    width: TOOLBAR_CONTROL_SIZE,
+    height: TOOLBAR_CONTROL_SIZE,
     backgroundColor: COLORS.beige,
     borderRadius: 8,
     alignItems: 'center',
@@ -281,12 +287,12 @@ const styles = StyleSheet.create({
   },
   colorGroup: {
     flexDirection: 'row',
-    gap: 8,
+    gap: TOOLBAR_BUTTON_GAP,
   },
   colorButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: TOOLBAR_COLOR_BUTTON_SIZE,
+    height: TOOLBAR_COLOR_BUTTON_SIZE,
+    borderRadius: TOOLBAR_COLOR_BUTTON_SIZE / 2,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 2,
@@ -304,11 +310,11 @@ const styles = StyleSheet.create({
   },
   strokeGroup: {
     flexDirection: 'row',
-    gap: 8,
+    gap: TOOLBAR_BUTTON_GAP,
   },
   strokeButton: {
-    width: 40,
-    height: 40,
+    width: TOOLBAR_CONTROL_SIZE,
+    height: TOOLBAR_CONTROL_SIZE,
     backgroundColor: COLORS.beige,
     borderRadius: 8,
     alignItems: 'center',
@@ -324,15 +330,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#D94848',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
+    height: TOOLBAR_CONTROL_SIZE,
+    paddingHorizontal: TOOLBAR_BUTTON_HORIZONTAL_PADDING,
+    paddingVertical: 0,
     borderRadius: 8,
-    gap: 8,
-    height: 40,
+    gap: TOOLBAR_BUTTON_GAP,
   },
   clearButtonText: {
     fontFamily: 'Afacad_400Regular',
-    fontSize: 16,
+    fontSize: TOOLBAR_TEXT_SIZE,
     color: COLORS.beige,
   },
   visibilityContainer: {
@@ -344,14 +350,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: COLORS.beige,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
+    height: TOOLBAR_CONTROL_SIZE,
+    paddingHorizontal: TOOLBAR_BUTTON_HORIZONTAL_PADDING,
+    paddingVertical: 0,
     borderRadius: 8,
-    gap: 8,
+    gap: TOOLBAR_BUTTON_GAP,
   },
   visibilityButtonText: {
     fontFamily: 'Afacad_400Regular',
-    fontSize: 16,
+    fontSize: TOOLBAR_TEXT_SIZE,
     color: COLORS.darkBrown,
   },
   visibilityDropdown: {
@@ -379,13 +386,13 @@ const styles = StyleSheet.create({
   },
   visibilityUsername: {
     fontFamily: 'Afacad_400Regular',
-    fontSize: 14,
+    fontSize: TOOLBAR_TEXT_SIZE,
     color: COLORS.darkBrown,
     flex: 1,
   },
   visibilityEmptyText: {
     fontFamily: 'Afacad_400Regular',
-    fontSize: 14,
+    fontSize: TOOLBAR_TEXT_SIZE,
     color: COLORS.lightBrown,
     fontStyle: 'italic',
   },

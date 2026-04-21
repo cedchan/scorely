@@ -988,7 +988,7 @@ const styles = StyleSheet.create({
   },
 
   metaBadge: {
-    backgroundColor: COLORS.accentSoft,
+    backgroundColor: COLORS.background,
     borderRadius: 999,
     paddingHorizontal: 10,
     paddingVertical: 6,
