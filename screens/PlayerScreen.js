@@ -48,6 +48,7 @@ export default function PlayerScreen({ route, navigation }) {
   const webAudioRef = useRef(null);
   const audioPollTimerRef = useRef(null);
   const playbackAnimationFrameRef = useRef(null);
+
   const [pages, setPages] = useState([]);
   const [title, setTitle] = useState(route.params?.fileName || 'Digital Score');
   const [currentPage, setCurrentPage] = useState(0);
@@ -60,12 +61,12 @@ export default function PlayerScreen({ route, navigation }) {
   const [alignmentMappings, setAlignmentMappings] = useState([]);
   const [activeMeasure, setActiveMeasure] = useState(null);
   const [activeMeasureIndex, setActiveMeasureIndex] = useState(null);
-  const [pageTurnMode, setPageTurnMode] = useState('manual');
-  const [showPageTurnMenu, setShowPageTurnMenu] = useState(false);
+
   const [backwardMotion, setBackwardMotion] = useState('manual');
   const [forwardMotion, setForwardMotion] = useState('manual');
   const [showBackwardMenu, setShowBackwardMenu] = useState(false);
   const [showForwardMenu, setShowForwardMenu] = useState(false);
+
   const [annotations, setAnnotations] = useState([]);
   const [annotationsEnabled, setAnnotationsEnabled] = useState(false);
   const [currentTool, setCurrentTool] = useState('pen');
@@ -78,6 +79,7 @@ export default function PlayerScreen({ route, navigation }) {
   const [selectedPresenceUser, setSelectedPresenceUser] = useState(null);
   const [hiddenAnnotationUsers, setHiddenAnnotationUsers] = useState(new Set());
   const [showUserVisibilityDropdown, setShowUserVisibilityDropdown] = useState(false);
+
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const faceLandmarkerRef = useRef(null);
@@ -85,16 +87,21 @@ export default function PlayerScreen({ route, navigation }) {
   const [cameraEnabled, setCameraEnabled] = useState(false);
   const [cameraError, setCameraError] = useState(null);
   const nodPhaseRef = useRef('idle');
+  const tiltPhaseRef = useRef('idle');
+  const turnPhaseRef = useRef('idle');
+  const mouthPhaseRef = useRef('idle');
   const lastTurnTimeRef = useRef(0);
   const baselineRelativeYRef = useRef(null);
   const currentPageRef = useRef(0);
   const [debugInfo, setDebugInfo] = useState('');
   const updateMeasureFromTimeRef = useRef(() => {});
+
   const jobId = route.params?.jobId;
   const apiBaseUrl = route.params?.apiBaseUrl || getApiBaseUrl();
   const pageManifestPath =
     route.params?.pageManifestPath || (jobId ? `/api/score-pages/${jobId}` : null);
   const cacheToken = jobId || route.params?.fileName || 'score';
+
   const isTabletLayout = width >= 900;
   const pageHorizontalPadding = isTabletLayout ? 56 : 20;
   const pageVerticalPadding = isTabletLayout ? 24 : 16;
@@ -102,6 +109,7 @@ export default function PlayerScreen({ route, navigation }) {
   const controlsHeight = isTabletLayout ? 54 : 48;
   const compactHeaderHeight = 56;
   const toolbarHeight = 58;
+
   const availablePageHeight = Math.max(
     320,
     height -
@@ -111,8 +119,9 @@ export default function PlayerScreen({ route, navigation }) {
       pageVerticalPadding -
       pageTopPadding
   );
-  const nodEnabled = pageTurnMode === 'nod';
 
+  const gestureDetectionEnabled =
+  backwardMotion !== 'manual' || forwardMotion !== 'manual';
   const measureRegionLookup = useMemo(() => {
     const lookup = new Map();
     pages.forEach((page, pageIndex) => {
@@ -135,9 +144,11 @@ export default function PlayerScreen({ route, navigation }) {
     if (measureRegionLookup.size || !pages.length || !alignmentMappings.length) {
       return [];
     }
+
     if (!pages.length || !alignmentMappings.length) {
       return [];
     }
+
     const measuresPerPage = Math.ceil(alignmentMappings.length / pages.length);
     return pages.map((page, index) => {
       const startIndex = index * measuresPerPage;
@@ -177,16 +188,19 @@ export default function PlayerScreen({ route, navigation }) {
 
   const normalizePageMeasureRegions = (pageList = []) => {
     let fallbackMeasureIndex = 0;
+
     return pageList.map((page) => {
       const measureRegions = (page.measure_regions || []).map((region) => {
         const parsedIndex = Number(region.measure_index);
         const measureIndex = Number.isFinite(parsedIndex) ? parsedIndex : fallbackMeasureIndex;
         fallbackMeasureIndex = Math.max(fallbackMeasureIndex + 1, measureIndex + 1);
+
         return {
           ...region,
           measure_index: measureIndex,
         };
       });
+
       return {
         ...page,
         measure_regions: measureRegions,
@@ -198,6 +212,7 @@ export default function PlayerScreen({ route, navigation }) {
     if (!svgXml || !region) {
       return svgXml;
     }
+
     const rectX = region.x * 21000;
     const rectY = region.y * 29700;
     const rectWidth = region.width * 21000;
@@ -211,6 +226,7 @@ export default function PlayerScreen({ route, navigation }) {
       ' stroke-width="48"',
       ' />',
     ].join('');
+
     return svgXml.replace(
       /(<svg[^>]*class="definition-scale"[^>]*>)([\s\S]*?)(<\/svg>)/,
       `$1$2${highlightRect}$3`
@@ -239,6 +255,7 @@ export default function PlayerScreen({ route, navigation }) {
         }
 
         setTitle(data.title || route.params?.fileName || 'Digital Score');
+
         const normalizedPages = normalizePageMeasureRegions(data.pages || []);
         const hydratedPages = await Promise.all(
           normalizedPages.map(async (page) => {
@@ -379,65 +396,39 @@ export default function PlayerScreen({ route, navigation }) {
     };
 
     const handleAnnotationUpdated = ({ annotation }) => {
-      console.log('[PlayerScreen] handleAnnotationUpdated called with:', {
-        id: annotation.id,
-        _isTemp: annotation._isTemp,
-        _isFinal: annotation._isFinal,
-        user_id: annotation.user_id,
-      });
-
       setAnnotations((prev) => {
         const exists = prev.some((a) => a.id === annotation.id);
-
-        // Only keep _isTemp flag if explicitly set to true
         const isTemp = annotation._isTemp === true;
         const isFinal = annotation._isFinal === true;
 
-        console.log('[PlayerScreen] Processing annotation:', {
-          id: annotation.id,
-          exists,
-          isTemp,
-          isFinal,
-        });
-
         if (exists) {
-          const updated = prev.map((a) => {
-            if (a.id === annotation.id) {
-              if (isFinal) {
-                // Final version, remove temp flags
-                const { _isTemp, _isFinal, ...finalAnnotation } = annotation;
-                console.log('[PlayerScreen] Finalizing annotation:', annotation.id);
-                return finalAnnotation;
-              } else if (isTemp) {
-                // Live update, keep temp flag
-                console.log('[PlayerScreen] Keeping temp flag for:', annotation.id);
-                return { ...annotation, _isTemp: true };
-              } else {
-                // No special flags, just update normally (removes _isTemp)
-                const { _isTemp: removedTemp, ...cleanAnnotation } = annotation;
-                console.log('[PlayerScreen] Removing temp flag from:', annotation.id);
-                return cleanAnnotation;
-              }
+          return prev.map((a) => {
+            if (a.id !== annotation.id) return a;
+
+            if (isFinal) {
+              const { _isTemp, _isFinal, ...finalAnnotation } = annotation;
+              return finalAnnotation;
             }
-            return a;
+
+            if (isTemp) {
+              return { ...annotation, _isTemp: true };
+            }
+
+            const { _isTemp: removedTemp, ...cleanAnnotation } = annotation;
+            return cleanAnnotation;
           });
-          console.log('[PlayerScreen] After update, annotation state:', updated.find(a => a.id === annotation.id));
-          return updated;
         }
 
-        // New annotation
         if (isFinal) {
           const { _isTemp, _isFinal, ...finalAnnotation } = annotation;
-          console.log('[PlayerScreen] Adding new final annotation:', annotation.id);
           return [...prev, finalAnnotation];
-        } else if (isTemp) {
-          console.log('[PlayerScreen] Adding new temp annotation:', annotation.id);
-          return [...prev, { ...annotation, _isTemp: true }];
-        } else {
-          // New annotation without flags - don't add _isTemp
-          console.log('[PlayerScreen] Adding new annotation without flags:', annotation.id);
-          return [...prev, annotation];
         }
+
+        if (isTemp) {
+          return [...prev, { ...annotation, _isTemp: true }];
+        }
+
+        return [...prev, annotation];
       });
     };
 
@@ -522,6 +513,9 @@ export default function PlayerScreen({ route, navigation }) {
       faceLandmarkerRef.current = null;
       setCameraEnabled(false);
       nodPhaseRef.current = 'idle';
+      tiltPhaseRef.current = 'idle';
+      turnPhaseRef.current = 'idle';
+      mouthPhaseRef.current = 'idle';
       lastTurnTimeRef.current = 0;
       baselineRelativeYRef.current = null;
     };
@@ -575,7 +569,7 @@ export default function PlayerScreen({ route, navigation }) {
       if (err?.name === 'NotReadableError' || err?.name === 'TrackStartError') {
         return 'The camera is already in use by another app or tab.';
       }
-      return err?.message || 'Unable to start the camera for nod detection.';
+      return err?.message || 'Unable to start the camera for gesture detection.';
     };
 
     const requestCameraStream = async () => {
@@ -603,7 +597,7 @@ export default function PlayerScreen({ route, navigation }) {
     };
 
     const startCameraAndTracking = async () => {
-      if (!nodEnabled) {
+      if (!gestureDetectionEnabled) {
         setCameraError(null);
         stopCamera();
         return;
@@ -612,14 +606,14 @@ export default function PlayerScreen({ route, navigation }) {
       setCameraError(null);
 
       if (!navigator.mediaDevices?.getUserMedia) {
-        setCameraError('This browser does not support camera access for nod detection.');
+        setCameraError('This browser does not support camera access for gesture detection.');
         stopCamera();
         return;
       }
 
       if (typeof window !== 'undefined' && !window.isSecureContext) {
         setCameraError(
-          'Camera access on iPad Safari requires HTTPS or localhost. Open this page over HTTPS to use nod detection.'
+          'Camera access on iPad Safari requires HTTPS or localhost. Open this page over HTTPS to use gesture detection.'
         );
         stopCamera();
         return;
@@ -628,9 +622,11 @@ export default function PlayerScreen({ route, navigation }) {
       try {
         const stream = await requestCameraStream();
         setDebugInfo('Loading AI model...');
+
         const vision = await FilesetResolver.forVisionTasks(
           `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MEDIAPIPE_VERSION}/wasm`
         );
+
         setDebugInfo('Creating face detector...');
 
         const faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
@@ -674,9 +670,7 @@ export default function PlayerScreen({ route, navigation }) {
         setCameraEnabled(true);
 
         const detectFrame = () => {
-          if (cancelled) {
-            return;
-          }
+          if (cancelled) return;
 
           if (!videoRef.current || !faceLandmarkerRef.current) {
             animationFrameRef.current = requestAnimationFrame(detectFrame);
@@ -703,20 +697,30 @@ export default function PlayerScreen({ route, navigation }) {
             const nose = face[1];
             const leftEye = face[33];
             const rightEye = face[263];
-
-            if (nose && leftEye && rightEye) {
-              const eyeY = (leftEye.y + rightEye.y) / 2;
+            const upperLip = face[13];
+            const lowerLip = face[14];
+            if (nose && leftEye && rightEye && upperLip && lowerLip) {              const eyeY = (leftEye.y + rightEye.y) / 2;
               const relativeY = nose.y - eyeY;
               const delta =
                 baselineRelativeYRef.current !== null ? relativeY - baselineRelativeYRef.current : 0;
-
+              const tiltDelta = leftEye.y - rightEye.y;
+              const faceCenterX = (leftEye.x + rightEye.x) / 2;
+              const turnDelta = nose.x - faceCenterX;
+              const mouthGap = lowerLip.y - upperLip.y;
               setDebugInfo(
-                `✓ Face detected\nPhase: ${nodPhaseRef.current}\nDelta: ${delta.toFixed(
+                `✓ Face detected\nPhase: ${nodPhaseRef.current}\nNod Δ: ${delta.toFixed(
                   4
-                )}\nBaseline: ${baselineRelativeYRef.current?.toFixed(4) || 'null'}`
+                )}\nTilt Δ: ${tiltDelta.toFixed(4)}\nTurn Δ: ${turnDelta.toFixed(
+                  4
+                )}\nMouth Gap: ${mouthGap.toFixed(4)}\nBaseline: ${
+                  baselineRelativeYRef.current?.toFixed(4) || 'null'
+                }`
               );
-
+            
               handleNodDetection(nose.y, eyeY);
+              handleTiltDetection(leftEye.y, rightEye.y);
+              handleTurnDetection(nose.x, leftEye.x, rightEye.x);
+              handleMouthDetection(upperLip.y, lowerLip.y);
             } else {
               setDebugInfo('✓ Face detected (missing landmarks)');
             }
@@ -742,8 +746,7 @@ export default function PlayerScreen({ route, navigation }) {
       cancelled = true;
       stopCamera();
     };
-  }, [nodEnabled]);
-
+  }, [gestureDetectionEnabled, forwardMotion, backwardMotion]);
   useEffect(() => {
     let objectUrl = null;
 
@@ -821,15 +824,152 @@ export default function PlayerScreen({ route, navigation }) {
       nodPhaseRef.current = 'idle';
       lastTurnTimeRef.current = now;
 
-      if (currentPageRef.current < pages.length - 1) {
+      if (forwardMotion === 'nod' && currentPageRef.current < pages.length - 1) {
         goToPage(currentPageRef.current + 1);
+      } else if (backwardMotion === 'nod' && currentPageRef.current > 0) {
+        goToPage(currentPageRef.current - 1);
       }
     }
 
     baselineRelativeYRef.current =
       baselineRelativeYRef.current * baselineSmoothing + relativeY * (1 - baselineSmoothing);
   };
-
+  const handleTiltDetection = (leftEyeY, rightEyeY) => {
+    const now = Date.now();
+    const tiltDelta = leftEyeY - rightEyeY;
+    const TILT_THRESHOLD = 0.02;
+    const RESET_THRESHOLD = 0.008;
+    const cooldownMs = config.nodDetection?.cooldownMs || 1000;
+  
+    if (Math.abs(tiltDelta) < RESET_THRESHOLD) {
+      tiltPhaseRef.current = 'idle';
+      return;
+    }
+  
+    if (now - lastTurnTimeRef.current < cooldownMs) {
+      return;
+    }
+  
+    if (tiltPhaseRef.current !== 'idle') {
+      return;
+    }
+  
+    if (tiltDelta > TILT_THRESHOLD) {
+      tiltPhaseRef.current = 'active';
+      lastTurnTimeRef.current = now;
+  
+      if (forwardMotion === 'tilt_right' && currentPageRef.current < pages.length - 1) {
+        goToPage(currentPageRef.current + 1);
+        return;
+      }
+  
+      if (backwardMotion === 'tilt_right' && currentPageRef.current > 0) {
+        goToPage(currentPageRef.current - 1);
+        return;
+      }
+    }
+  
+    if (tiltDelta < -TILT_THRESHOLD) {
+      tiltPhaseRef.current = 'active';
+      lastTurnTimeRef.current = now;
+  
+      if (forwardMotion === 'tilt_left' && currentPageRef.current < pages.length - 1) {
+        goToPage(currentPageRef.current + 1);
+        return;
+      }
+  
+      if (backwardMotion === 'tilt_left' && currentPageRef.current > 0) {
+        goToPage(currentPageRef.current - 1);
+        return;
+      }
+    }
+  };
+  const handleTurnDetection = (noseX, leftEyeX, rightEyeX) => {
+    const now = Date.now();
+    const faceCenterX = (leftEyeX + rightEyeX) / 2;
+    const turnDelta = noseX - faceCenterX;
+    const TURN_THRESHOLD = 0.018;
+    const RESET_THRESHOLD = 0.008;
+    const cooldownMs = config.nodDetection?.cooldownMs || 1000;
+  
+    if (Math.abs(turnDelta) < RESET_THRESHOLD) {
+      turnPhaseRef.current = 'idle';
+      return;
+    }
+  
+    if (now - lastTurnTimeRef.current < cooldownMs) {
+      return;
+    }
+  
+    if (turnPhaseRef.current !== 'idle') {
+      return;
+    }
+  
+    if (turnDelta > TURN_THRESHOLD) {
+      turnPhaseRef.current = 'active';
+      lastTurnTimeRef.current = now;
+  
+      if (forwardMotion === 'turn_left' && currentPageRef.current < pages.length - 1) {
+        goToPage(currentPageRef.current + 1);
+        return;
+      }
+  
+      if (backwardMotion === 'turn_left' && currentPageRef.current > 0) {
+        goToPage(currentPageRef.current - 1);
+        return;
+      }
+    }
+  
+    if (turnDelta < -TURN_THRESHOLD) {
+      turnPhaseRef.current = 'active';
+      lastTurnTimeRef.current = now;
+  
+      if (forwardMotion === 'turn_right' && currentPageRef.current < pages.length - 1) {
+        goToPage(currentPageRef.current + 1);
+        return;
+      }
+  
+      if (backwardMotion === 'turn_right' && currentPageRef.current > 0) {
+        goToPage(currentPageRef.current - 1);
+        return;
+      }
+    }
+  };
+  const handleMouthDetection = (upperLipY, lowerLipY) => {
+    const now = Date.now();
+    const mouthGap = lowerLipY - upperLipY;
+    const OPEN_THRESHOLD = 0.03;
+    const RESET_THRESHOLD = 0.018;
+    const cooldownMs = config.nodDetection?.cooldownMs || 1000;
+  
+    if (mouthGap < RESET_THRESHOLD) {
+      mouthPhaseRef.current = 'idle';
+      return;
+    }
+  
+    if (now - lastTurnTimeRef.current < cooldownMs) {
+      return;
+    }
+  
+    if (mouthPhaseRef.current !== 'idle') {
+      return;
+    }
+  
+    if (mouthGap > OPEN_THRESHOLD) {
+      mouthPhaseRef.current = 'active';
+      lastTurnTimeRef.current = now;
+  
+      if (forwardMotion === 'open_mouth' && currentPageRef.current < pages.length - 1) {
+        goToPage(currentPageRef.current + 1);
+        return;
+      }
+  
+      if (backwardMotion === 'open_mouth' && currentPageRef.current > 0) {
+        goToPage(currentPageRef.current - 1);
+        return;
+      }
+    }
+  };
   const onMomentumScrollEnd = (event) => {
     const nextPage = Math.round(event.nativeEvent.contentOffset.x / width);
     setCurrentPage(nextPage);
@@ -868,8 +1008,10 @@ export default function PlayerScreen({ route, navigation }) {
     const exactMeasureRegion =
       nextMeasureIndex !== null ? measureRegionLookup.get(Number(nextMeasureIndex)) : null;
 
+    const autoEnabled = forwardMotion === 'auto';
+
     if (
-      pageTurnMode === 'auto' &&
+      autoEnabled &&
       exactMeasureRegion &&
       exactMeasureRegion.pageIndex !== currentPageRef.current
     ) {
@@ -884,11 +1026,7 @@ export default function PlayerScreen({ route, navigation }) {
         nextMeasure <= range.endMeasure
     );
 
-    if (
-      pageTurnMode === 'auto' &&
-      nextPageIndex !== -1 &&
-      nextPageIndex !== currentPageRef.current
-    ) {
+    if (autoEnabled && nextPageIndex !== -1 && nextPageIndex !== currentPageRef.current) {
       goToPage(nextPageIndex);
     }
   };
@@ -1115,25 +1253,6 @@ export default function PlayerScreen({ route, navigation }) {
     }
   };
 
-  const handleSelectPageTurnMode = (mode) => {
-    setPageTurnMode(mode);
-    setShowPageTurnMenu(false);
-    setCameraError(null);
-  };
-
-  const getPageTurnLabel = () => {
-    switch (pageTurnMode) {
-      case 'nod':
-        return 'Page Turn: Nod';
-      case 'tap':
-        return 'Page Turn: Tap';
-      case 'auto':
-        return 'Page Turn: Auto';
-      default:
-        return 'Page Turn';
-    }
-  };
-
   const getMotionLabel = (motionType) => {
     switch (motionType) {
       case 'nod':
@@ -1148,10 +1267,62 @@ export default function PlayerScreen({ route, navigation }) {
         return 'Tilt Right';
       case 'open_mouth':
         return 'Open Mouth';
+      case 'auto':
+        return 'Auto';
       default:
         return 'Manual';
     }
   };
+
+  const selectBackwardMotion = (motion) => {
+    if (motion !== 'manual' && motion === forwardMotion) {
+      return;
+    }
+  
+    tiltPhaseRef.current = 'idle';
+    turnPhaseRef.current = 'idle';
+    nodPhaseRef.current = 'idle';
+    mouthPhaseRef.current = 'idle';
+    lastTurnTimeRef.current = 0;
+  
+    setBackwardMotion(motion);
+    setShowBackwardMenu(false);
+  };
+
+  const selectForwardMotion = (motion) => {
+    if (motion !== 'manual' && motion === backwardMotion) {
+      return;
+    }
+  
+    tiltPhaseRef.current = 'idle';
+    turnPhaseRef.current = 'idle';
+    nodPhaseRef.current = 'idle';
+    mouthPhaseRef.current = 'idle';
+    lastTurnTimeRef.current = 0;
+  
+    setForwardMotion(motion);
+    setShowForwardMenu(false);
+  };
+
+  const renderMotionOption = (currentValue, value, label, onSelect, isLast = false) => (
+    <TouchableOpacity
+      style={[
+        styles.motionDropdownItem,
+        currentValue === value && styles.motionDropdownItemActive,
+        !isLast && styles.motionDropdownItemBorder,
+      ]}
+      onPress={() => onSelect(value)}
+    >
+      <Text
+        style={[
+          styles.motionDropdownText,
+          currentValue === value && styles.motionDropdownTextActive,
+        ]}
+      >
+        {label}
+      </Text>
+    </TouchableOpacity>
+  );
 
   if (!fontsLoaded) {
     return null;
@@ -1186,16 +1357,13 @@ export default function PlayerScreen({ route, navigation }) {
       style={styles.container}
       onStartShouldSetResponder={() => {
         let shouldCapture = false;
+
         if (selectedPresenceUser) {
           setSelectedPresenceUser(null);
           shouldCapture = true;
         }
         if (showUserVisibilityDropdown) {
           setShowUserVisibilityDropdown(false);
-          shouldCapture = true;
-        }
-        if (showPageTurnMenu) {
-          setShowPageTurnMenu(false);
           shouldCapture = true;
         }
         if (showBackwardMenu) {
@@ -1206,6 +1374,7 @@ export default function PlayerScreen({ route, navigation }) {
           setShowForwardMenu(false);
           shouldCapture = true;
         }
+
         return shouldCapture;
       }}
     >
@@ -1216,8 +1385,7 @@ export default function PlayerScreen({ route, navigation }) {
           playsInline
           muted
           style={
-            config.nodDetection.showCameraPreview && nodEnabled && cameraEnabled
-              ? styles.cameraPreview
+            config.nodDetection.showCameraPreview && gestureDetectionEnabled && cameraEnabled              ? styles.cameraPreview
               : styles.hiddenCameraVideo
           }
         />
@@ -1258,6 +1426,7 @@ export default function PlayerScreen({ route, navigation }) {
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
           <FontAwesomeIcon icon={faArrowLeft} size={20} color={COLORS.beige} />
         </TouchableOpacity>
+
         <View style={styles.titleSection}>
           <Text style={styles.compactTitle} numberOfLines={1}>
             {title}
@@ -1266,6 +1435,7 @@ export default function PlayerScreen({ route, navigation }) {
             <FontAwesomeIcon icon={faEdit} size={16} color={COLORS.beige} />
           </TouchableOpacity>
         </View>
+
         <View style={styles.headerActions}>
           {presentUsers.length > 0 && (
             <View style={styles.presenceContainer}>
@@ -1283,6 +1453,7 @@ export default function PlayerScreen({ route, navigation }) {
                       {user.username?.charAt(0).toUpperCase() || '?'}
                     </Text>
                   </TouchableOpacity>
+
                   {selectedPresenceUser === user.user_id && (
                     <View style={styles.presenceTooltip}>
                       <Text style={styles.presenceTooltipText}>{user.username}</Text>
@@ -1292,6 +1463,7 @@ export default function PlayerScreen({ route, navigation }) {
               ))}
             </View>
           )}
+
           {shareCode && (
             <View style={styles.shareCodeContainer}>
               <Text style={styles.shareCodeLabel}>Share Code:</Text>
@@ -1307,13 +1479,6 @@ export default function PlayerScreen({ route, navigation }) {
       <View style={styles.headerSeparator} />
 
       <View style={styles.toolbarWrapper}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={styles.toolbarScrollView}
-          contentContainerStyle={styles.toolbarScrollContent}
-          nestedScrollEnabled={true}
-        >
         <View style={styles.toolbarRow}>
           <TouchableOpacity
             style={[styles.compactPlayButton, !audioUrl && styles.compactPlayButtonDisabled]}
@@ -1327,30 +1492,63 @@ export default function PlayerScreen({ route, navigation }) {
             />
           </TouchableOpacity>
 
-          {/* Backward Motion */}
           <View style={styles.motionMenuWrapper}>
             <TouchableOpacity
               style={styles.motionButton}
-              onPress={() => setShowBackwardMenu((prev) => !prev)}
+              onPress={() => {
+                setShowBackwardMenu((prev) => !prev);
+                setShowForwardMenu(false);
+                setShowUserVisibilityDropdown(false);
+              }}
             >
-              <FontAwesomeIcon icon={faShare} size={16} color={COLORS.darkBrown} style={{ transform: [{ scaleX: -1 }] }} />
+              <FontAwesomeIcon
+                icon={faShare}
+                size={16}
+                color={COLORS.darkBrown}
+                style={{ transform: [{ scaleX: -1 }] }}
+              />
               <Text style={styles.motionButtonText}>{getMotionLabel(backwardMotion)}</Text>
               <FontAwesomeIcon icon={faChevronDown} size={12} color={COLORS.darkBrown} />
             </TouchableOpacity>
 
+            {showBackwardMenu && (
+              <View style={styles.motionDropdown}>
+                {renderMotionOption(backwardMotion, 'manual', 'Manual', selectBackwardMotion)}
+                {renderMotionOption(backwardMotion, 'nod', 'Nod', selectBackwardMotion)}
+                {renderMotionOption(backwardMotion, 'turn_left', 'Turn Left', selectBackwardMotion)}
+                {renderMotionOption(backwardMotion, 'turn_right', 'Turn Right', selectBackwardMotion)}
+                {renderMotionOption(backwardMotion, 'tilt_left', 'Tilt Left', selectBackwardMotion)}
+                {renderMotionOption(backwardMotion, 'tilt_right', 'Tilt Right', selectBackwardMotion)}
+                {renderMotionOption(backwardMotion, 'open_mouth', 'Open Mouth', selectBackwardMotion, true)}
+              </View>
+            )}
           </View>
 
-          {/* Forward Motion */}
           <View style={styles.motionMenuWrapper}>
             <TouchableOpacity
               style={styles.motionButton}
-              onPress={() => setShowForwardMenu((prev) => !prev)}
+              onPress={() => {
+                setShowForwardMenu((prev) => !prev);
+                setShowBackwardMenu(false);
+                setShowUserVisibilityDropdown(false);
+              }}
             >
               <FontAwesomeIcon icon={faShare} size={16} color={COLORS.darkBrown} />
               <Text style={styles.motionButtonText}>{getMotionLabel(forwardMotion)}</Text>
               <FontAwesomeIcon icon={faChevronDown} size={12} color={COLORS.darkBrown} />
             </TouchableOpacity>
 
+            {showForwardMenu && (
+              <View style={styles.motionDropdown}>
+                {renderMotionOption(forwardMotion, 'manual', 'Manual', selectForwardMotion)}
+                {renderMotionOption(forwardMotion, 'nod', 'Nod', selectForwardMotion)}
+                {renderMotionOption(forwardMotion, 'turn_left', 'Turn Left', selectForwardMotion)}
+                {renderMotionOption(forwardMotion, 'turn_right', 'Turn Right', selectForwardMotion)}
+                {renderMotionOption(forwardMotion, 'tilt_left', 'Tilt Left', selectForwardMotion)}
+                {renderMotionOption(forwardMotion, 'tilt_right', 'Tilt Right', selectForwardMotion)}
+                {renderMotionOption(forwardMotion, 'open_mouth', 'Open Mouth', selectForwardMotion, true)}
+              </View>
+            )}
           </View>
 
           <AnnotationToolbar
@@ -1383,158 +1581,20 @@ export default function PlayerScreen({ route, navigation }) {
             }}
           />
         </View>
-      </ScrollView>
-
-      {/* Render dropdowns outside ScrollView */}
-      {showBackwardMenu && (
-        <View style={[styles.motionDropdownAbsolute, { left: 88 }]}>
-          <TouchableOpacity
-            style={styles.motionDropdownItem}
-            onPress={() => {
-              setBackwardMotion('manual');
-              setShowBackwardMenu(false);
-            }}
-          >
-            <Text style={styles.motionDropdownText}>Manual</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.motionDropdownItem}
-            onPress={() => {
-              setBackwardMotion('nod');
-              setShowBackwardMenu(false);
-            }}
-          >
-            <Text style={styles.motionDropdownText}>Nod</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.motionDropdownItem}
-            onPress={() => {
-              setBackwardMotion('turn_left');
-              setShowBackwardMenu(false);
-            }}
-          >
-            <Text style={styles.motionDropdownText}>Turn Left</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.motionDropdownItem}
-            onPress={() => {
-              setBackwardMotion('turn_right');
-              setShowBackwardMenu(false);
-            }}
-          >
-            <Text style={styles.motionDropdownText}>Turn Right</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.motionDropdownItem}
-            onPress={() => {
-              setBackwardMotion('tilt_left');
-              setShowBackwardMenu(false);
-            }}
-          >
-            <Text style={styles.motionDropdownText}>Tilt Left</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.motionDropdownItem}
-            onPress={() => {
-              setBackwardMotion('tilt_right');
-              setShowBackwardMenu(false);
-            }}
-          >
-            <Text style={styles.motionDropdownText}>Tilt Right</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.motionDropdownItem}
-            onPress={() => {
-              setBackwardMotion('open_mouth');
-              setShowBackwardMenu(false);
-            }}
-          >
-            <Text style={styles.motionDropdownText}>Open Mouth</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-
-      {showForwardMenu && (
-        <View style={[styles.motionDropdownAbsolute, { left: 220 }]}>
-          <TouchableOpacity
-            style={styles.motionDropdownItem}
-            onPress={() => {
-              setForwardMotion('manual');
-              setShowForwardMenu(false);
-            }}
-          >
-            <Text style={styles.motionDropdownText}>Manual</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.motionDropdownItem}
-            onPress={() => {
-              setForwardMotion('nod');
-              setShowForwardMenu(false);
-            }}
-          >
-            <Text style={styles.motionDropdownText}>Nod</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.motionDropdownItem}
-            onPress={() => {
-              setForwardMotion('turn_left');
-              setShowForwardMenu(false);
-            }}
-          >
-            <Text style={styles.motionDropdownText}>Turn Left</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.motionDropdownItem}
-            onPress={() => {
-              setForwardMotion('turn_right');
-              setShowForwardMenu(false);
-            }}
-          >
-            <Text style={styles.motionDropdownText}>Turn Right</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.motionDropdownItem}
-            onPress={() => {
-              setForwardMotion('tilt_left');
-              setShowForwardMenu(false);
-            }}
-          >
-            <Text style={styles.motionDropdownText}>Tilt Left</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.motionDropdownItem}
-            onPress={() => {
-              setForwardMotion('tilt_right');
-              setShowForwardMenu(false);
-            }}
-          >
-            <Text style={styles.motionDropdownText}>Tilt Right</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.motionDropdownItem}
-            onPress={() => {
-              setForwardMotion('open_mouth');
-              setShowForwardMenu(false);
-            }}
-          >
-            <Text style={styles.motionDropdownText}>Open Mouth</Text>
-          </TouchableOpacity>
-        </View>
-      )}
       </View>
 
       {(audioError ||
         cameraError ||
-        (nodEnabled && !cameraEnabled) ||
-        (nodEnabled && config.nodDetection.showDebug && debugInfo)) ? (
+        (gestureDetectionEnabled && !cameraEnabled) ||
+        (gestureDetectionEnabled && config.nodDetection.showDebug && debugInfo)) ? (
         <View style={styles.cameraStatusRow}>
           {audioError ? <Text style={styles.cameraStatusText}>{audioError}</Text> : null}
-          {cameraError || (nodEnabled && !cameraEnabled) ? (
+          {cameraError || (gestureDetectionEnabled && !cameraEnabled) ? (
             <Text style={styles.cameraStatusText}>
-              {cameraError || 'Starting front camera for nod detection...'}
+              {cameraError || 'Starting front camera for gesture detection...'}
             </Text>
           ) : null}
-          {nodEnabled && cameraEnabled && config.nodDetection.showDebug && debugInfo ? (
+          {gestureDetectionEnabled && cameraEnabled && config.nodDetection.showDebug && debugInfo ? (
             <Text style={[styles.cameraStatusText, styles.debugText]}>{debugInfo}</Text>
           ) : null}
         </View>
@@ -1553,230 +1613,236 @@ export default function PlayerScreen({ route, navigation }) {
           showsHorizontalScrollIndicator={false}
           scrollEnabled={!annotationsEnabled}
         >
-        {pages.map((item) => {
-          const containerWidth = width - pageHorizontalPadding * 2;
-          const containerHeight = availablePageHeight;
-          const isSvgPage = String(item.image_path || item.uri || '')
-            .toLowerCase()
-            .includes('.svg');
+          {pages.map((item) => {
+            const containerWidth = width - pageHorizontalPadding * 2;
+            const containerHeight = availablePageHeight;
+            const isSvgPage = String(item.image_path || item.uri || '')
+              .toLowerCase()
+              .includes('.svg');
 
-          const imageWidth = item.width || 1240;
-          const imageHeight = item.height || 1754;
+            const imageWidth = item.width || 1240;
+            const imageHeight = item.height || 1754;
 
-          const scale = Math.min(containerWidth / imageWidth, containerHeight / imageHeight);
-          const displayedWidth = imageWidth * scale;
-          const displayedHeight = imageHeight * scale;
-          const imageOffsetX = (containerWidth - displayedWidth) / 2;
-          const imageOffsetY = (containerHeight - displayedHeight) / 2;
+            const scale = Math.min(containerWidth / imageWidth, containerHeight / imageHeight);
+            const displayedWidth = imageWidth * scale;
+            const displayedHeight = imageHeight * scale;
+            const imageOffsetX = (containerWidth - displayedWidth) / 2;
+            const imageOffsetY = (containerHeight - displayedHeight) / 2;
 
-          return (
-            <View
-              key={`${cacheToken}-${item.page_number}`}
-              style={[
-                styles.pageWrapper,
-                {
-                  width,
-                  paddingHorizontal: pageHorizontalPadding,
-                  paddingBottom: pageVerticalPadding,
-                },
-              ]}
-            >
+            return (
               <View
+                key={`${cacheToken}-${item.page_number}`}
                 style={[
-                  styles.pageCard,
+                  styles.pageWrapper,
                   {
-                    minHeight: availablePageHeight,
-                    padding: 0,
+                    width,
+                    paddingHorizontal: pageHorizontalPadding,
+                    paddingBottom: pageVerticalPadding,
                   },
                 ]}
               >
-                {(() => {
-                  const activeMeasureRegion =
-                    activeMeasureIndex !== null
-                      ? (item.measure_regions || []).find((region) => {
-                          const regionIndex = Number(region.measure_index);
-                          if (Number.isFinite(regionIndex)) {
-                            return regionIndex === Number(activeMeasureIndex);
-                          }
-                          return Number(region.measure) === Number(activeMeasure);
-                        })
-                      : null;
+                <View
+                  style={[
+                    styles.pageCard,
+                    {
+                      minHeight: availablePageHeight,
+                      padding: 0,
+                    },
+                  ]}
+                >
+                  {(() => {
+                    const activeMeasureRegion =
+                      activeMeasureIndex !== null
+                        ? (item.measure_regions || []).find((region) => {
+                            const regionIndex = Number(region.measure_index);
+                            if (Number.isFinite(regionIndex)) {
+                              return regionIndex === Number(activeMeasureIndex);
+                            }
+                            return Number(region.measure) === Number(activeMeasure);
+                          })
+                        : null;
 
-                  const range = measurePageRanges[item.page_number - 1];
-                  const isActiveRange =
-                    !activeMeasureRegion &&
-                    range &&
-                    activeMeasure !== null &&
-                    activeMeasure >= range.startMeasure &&
-                    activeMeasure <= range.endMeasure;
-                  const measuresOnPage = range ? Math.max(1, range.endIndex - range.startIndex + 1) : 1;
-                  const activeIndexWithinPage =
-                    isActiveRange && range ? activeMeasure - range.startMeasure : 0;
-                  const bandTopPercent =
-                    range && isActiveRange ? (activeIndexWithinPage / measuresOnPage) * 100 : 0;
-                  const bandHeightPercent = Math.max(12, 100 / measuresOnPage);
-                  const overlayInset = 2;
-                  const regionLeft = activeMeasureRegion
-                    ? imageOffsetX + activeMeasureRegion.x * displayedWidth
-                    : 0;
-                  const regionTop = activeMeasureRegion
-                    ? imageOffsetY + activeMeasureRegion.y * displayedHeight
-                    : 0;
-                  const regionRight = activeMeasureRegion
-                    ? imageOffsetX + (activeMeasureRegion.x + activeMeasureRegion.width) * displayedWidth
-                    : 0;
-                  const regionBottom = activeMeasureRegion
-                    ? imageOffsetY + (activeMeasureRegion.y + activeMeasureRegion.height) * displayedHeight
-                    : 0;
-                  const overlayLeft = activeMeasureRegion
-                    ? Math.max(imageOffsetX, regionLeft - overlayInset)
-                    : 0;
-                  const overlayTop = activeMeasureRegion
-                    ? Math.max(imageOffsetY, regionTop - overlayInset)
-                    : 0;
-                  const overlayRight = activeMeasureRegion
-                    ? Math.min(imageOffsetX + displayedWidth, regionRight + overlayInset)
-                    : 0;
-                  const overlayBottom = activeMeasureRegion
-                    ? Math.min(imageOffsetY + displayedHeight, regionBottom + overlayInset)
-                    : 0;
+                    const range = measurePageRanges[item.page_number - 1];
+                    const isActiveRange =
+                      !activeMeasureRegion &&
+                      range &&
+                      activeMeasure !== null &&
+                      activeMeasure >= range.startMeasure &&
+                      activeMeasure <= range.endMeasure;
+                    const measuresOnPage = range
+                      ? Math.max(1, range.endIndex - range.startIndex + 1)
+                      : 1;
+                    const activeIndexWithinPage =
+                      isActiveRange && range ? activeMeasure - range.startMeasure : 0;
+                    const bandTopPercent =
+                      range && isActiveRange ? (activeIndexWithinPage / measuresOnPage) * 100 : 0;
+                    const bandHeightPercent = Math.max(12, 100 / measuresOnPage);
+                    const overlayInset = 2;
+                    const regionLeft = activeMeasureRegion
+                      ? imageOffsetX + activeMeasureRegion.x * displayedWidth
+                      : 0;
+                    const regionTop = activeMeasureRegion
+                      ? imageOffsetY + activeMeasureRegion.y * displayedHeight
+                      : 0;
+                    const regionRight = activeMeasureRegion
+                      ? imageOffsetX +
+                        (activeMeasureRegion.x + activeMeasureRegion.width) * displayedWidth
+                      : 0;
+                    const regionBottom = activeMeasureRegion
+                      ? imageOffsetY +
+                        (activeMeasureRegion.y + activeMeasureRegion.height) * displayedHeight
+                      : 0;
+                    const overlayLeft = activeMeasureRegion
+                      ? Math.max(imageOffsetX, regionLeft - overlayInset)
+                      : 0;
+                    const overlayTop = activeMeasureRegion
+                      ? Math.max(imageOffsetY, regionTop - overlayInset)
+                      : 0;
+                    const overlayRight = activeMeasureRegion
+                      ? Math.min(imageOffsetX + displayedWidth, regionRight + overlayInset)
+                      : 0;
+                    const overlayBottom = activeMeasureRegion
+                      ? Math.min(imageOffsetY + displayedHeight, regionBottom + overlayInset)
+                      : 0;
 
-                  return (
-                    <>
-                      <View style={styles.imageContainer}>
-                        {isSvgPage && item.svgXml ? (
-                          <SvgXml
-                            xml={injectHighlightIntoSvg(item.svgXml, activeMeasureRegion)}
-                            width={displayedWidth}
-                            height={displayedHeight}
-                            style={styles.pageSvg}
-                          />
-                        ) : isSvgPage ? (
-                          <SvgUri
-                            uri={item.uri}
-                            width={displayedWidth}
-                            height={displayedHeight}
-                            style={styles.pageSvg}
-                          />
-                        ) : (
-                          <Image
-                            source={{ uri: item.uri }}
-                            style={[
-                              styles.pageImage,
-                              {
-                                width: displayedWidth,
-                                height: displayedHeight,
-                              },
-                            ]}
-                            resizeMode="contain"
-                          />
-                        )}
-
-                        {!isSvgPage && activeMeasureRegion ? (
-                          <View
-                            pointerEvents="none"
-                            style={[
-                              styles.measureOverlay,
-                              {
-                                left: overlayLeft,
-                                top: overlayTop,
-                                width: Math.max(18, overlayRight - overlayLeft),
-                                height: Math.max(18, overlayBottom - overlayTop),
-                              },
-                            ]}
-                          />
-                        ) : null}
-
-                        {isActiveRange ? (
-                          <View
-                            pointerEvents="none"
-                            style={[
-                              styles.measureOverlay,
-                              {
-                                left: imageOffsetX,
-                                top: `${Math.min(88, bandTopPercent)}%`,
-                                height: `${Math.min(28, bandHeightPercent)}%`,
-                                width: displayedWidth,
-                              },
-                            ]}
-                          />
-                        ) : null}
-
-                        {!annotationsEnabled ? (
-                          <View pointerEvents="box-none" style={styles.measureHitAreaLayer}>
-                            {(item.measure_regions || []).map((region, regionIndex) => {
-                              const hitLeft = imageOffsetX + region.x * displayedWidth;
-                              const hitTop = imageOffsetY + region.y * displayedHeight;
-                              const hitWidth = region.width * displayedWidth;
-                              const hitHeight = region.height * displayedHeight;
-
-                              if (hitWidth <= 0 || hitHeight <= 0) {
-                                return null;
-                              }
-
-                              return (
-                                <TouchableOpacity
-                                  key={`${item.page_number}-${region.measure_index ?? regionIndex}`}
-                                  activeOpacity={1}
-                                  style={[
-                                    styles.measureHitArea,
-                                    {
-                                      left: hitLeft,
-                                      top: hitTop,
-                                      width: hitWidth,
-                                      height: hitHeight,
-                                    },
-                                  ]}
-                                  onPress={() => seekToMeasureRegion(region, item.page_number - 1)}
-                                />
-                              );
-                            })}
-                          </View>
-                        ) : null}
-
-                        {pageTurnMode === 'tap' && !annotationsEnabled ? (
-                          <View pointerEvents="box-none" style={styles.tapTurnOverlay}>
-                            <Pressable
-                              style={[styles.tapTurnZone, styles.tapTurnZoneLeft]}
-                              onPress={() => goToPage(currentPageRef.current - 1)}
-                              disabled={currentPageRef.current === 0}
+                    return (
+                      <>
+                        <View style={styles.imageContainer}>
+                          {isSvgPage && item.svgXml ? (
+                            <SvgXml
+                              xml={injectHighlightIntoSvg(item.svgXml, activeMeasureRegion)}
+                              width={displayedWidth}
+                              height={displayedHeight}
+                              style={styles.pageSvg}
                             />
-                            <Pressable
-                              style={[styles.tapTurnZone, styles.tapTurnZoneRight]}
-                              onPress={() => goToPage(currentPageRef.current + 1)}
-                              disabled={currentPageRef.current >= pages.length - 1}
+                          ) : isSvgPage ? (
+                            <SvgUri
+                              uri={item.uri}
+                              width={displayedWidth}
+                              height={displayedHeight}
+                              style={styles.pageSvg}
                             />
-                          </View>
-                        ) : null}
+                          ) : (
+                            <Image
+                              source={{ uri: item.uri }}
+                              style={[
+                                styles.pageImage,
+                                {
+                                  width: displayedWidth,
+                                  height: displayedHeight,
+                                },
+                              ]}
+                              resizeMode="contain"
+                            />
+                          )}
 
-                        <AnnotationLayer
-                          pageNumber={item.page_number}
-                          width={containerWidth}
-                          height={containerHeight}
-                          imageWidth={displayedWidth}
-                          imageHeight={displayedHeight}
-                          imageOffsetX={imageOffsetX}
-                          imageOffsetY={imageOffsetY}
-                          annotations={annotations}
-                          currentTool={currentTool}
-                          currentColor={currentColor}
-                          currentStrokeWidth={currentStrokeWidth}
-                          onAnnotationCreated={handleAnnotationCreated}
-                          onAnnotationUpdated={handleAnnotationUpdated}
-                          enabled={annotationsEnabled && currentPage === item.page_number - 1}
-                          currentUserId={userId}
-                          presentUsers={presentUsers}
-                          hiddenAnnotationUsers={hiddenAnnotationUsers}
-                        />
-                      </View>
-                    </>
-                  );
-                })()}
+                          {!isSvgPage && activeMeasureRegion ? (
+                            <View
+                              pointerEvents="none"
+                              style={[
+                                styles.measureOverlay,
+                                {
+                                  left: overlayLeft,
+                                  top: overlayTop,
+                                  width: Math.max(18, overlayRight - overlayLeft),
+                                  height: Math.max(18, overlayBottom - overlayTop),
+                                },
+                              ]}
+                            />
+                          ) : null}
+
+                          {isActiveRange ? (
+                            <View
+                              pointerEvents="none"
+                              style={[
+                                styles.measureOverlay,
+                                {
+                                  left: imageOffsetX,
+                                  top: `${Math.min(88, bandTopPercent)}%`,
+                                  height: `${Math.min(28, bandHeightPercent)}%`,
+                                  width: displayedWidth,
+                                },
+                              ]}
+                            />
+                          ) : null}
+
+                          {!annotationsEnabled ? (
+                            <View pointerEvents="box-none" style={styles.measureHitAreaLayer}>
+                              {(item.measure_regions || []).map((region, regionIndex) => {
+                                const hitLeft = imageOffsetX + region.x * displayedWidth;
+                                const hitTop = imageOffsetY + region.y * displayedHeight;
+                                const hitWidth = region.width * displayedWidth;
+                                const hitHeight = region.height * displayedHeight;
+
+                                if (hitWidth <= 0 || hitHeight <= 0) {
+                                  return null;
+                                }
+
+                                return (
+                                  <TouchableOpacity
+                                    key={`${item.page_number}-${region.measure_index ?? regionIndex}`}
+                                    activeOpacity={1}
+                                    style={[
+                                      styles.measureHitArea,
+                                      {
+                                        left: hitLeft,
+                                        top: hitTop,
+                                        width: hitWidth,
+                                        height: hitHeight,
+                                      },
+                                    ]}
+                                    onPress={() =>
+                                      seekToMeasureRegion(region, item.page_number - 1)
+                                    }
+                                  />
+                                );
+                              })}
+                            </View>
+                          ) : null}
+
+                          {forwardMotion === 'tap' && !annotationsEnabled ? (
+                            <View pointerEvents="box-none" style={styles.tapTurnOverlay}>
+                              <Pressable
+                                style={[styles.tapTurnZone, styles.tapTurnZoneLeft]}
+                                onPress={() => goToPage(currentPageRef.current - 1)}
+                                disabled={currentPageRef.current === 0}
+                              />
+                              <Pressable
+                                style={[styles.tapTurnZone, styles.tapTurnZoneRight]}
+                                onPress={() => goToPage(currentPageRef.current + 1)}
+                                disabled={currentPageRef.current >= pages.length - 1}
+                              />
+                            </View>
+                          ) : null}
+
+                          <AnnotationLayer
+                            pageNumber={item.page_number}
+                            width={containerWidth}
+                            height={containerHeight}
+                            imageWidth={displayedWidth}
+                            imageHeight={displayedHeight}
+                            imageOffsetX={imageOffsetX}
+                            imageOffsetY={imageOffsetY}
+                            annotations={annotations}
+                            currentTool={currentTool}
+                            currentColor={currentColor}
+                            currentStrokeWidth={currentStrokeWidth}
+                            onAnnotationCreated={handleAnnotationCreated}
+                            onAnnotationUpdated={handleAnnotationUpdated}
+                            enabled={annotationsEnabled && currentPage === item.page_number - 1}
+                            currentUserId={userId}
+                            presentUsers={presentUsers}
+                            hiddenAnnotationUsers={hiddenAnnotationUsers}
+                          />
+                        </View>
+                      </>
+                    );
+                  })()}
+                </View>
               </View>
-            </View>
-          );
-        })}
-      </ScrollView>
+            );
+          })}
+        </ScrollView>
       </View>
 
       <View
@@ -1797,7 +1863,12 @@ export default function PlayerScreen({ route, navigation }) {
           disabled={currentPage === 0}
           onPress={() => goToPage(currentPage - 1)}
         >
-          <FontAwesomeIcon icon={faShare} size={18} color={COLORS.darkBrown} style={{ transform: [{ scaleX: -1 }] }} />
+          <FontAwesomeIcon
+            icon={faShare}
+            size={18}
+            color={COLORS.darkBrown}
+            style={{ transform: [{ scaleX: -1 }] }}
+          />
         </TouchableOpacity>
 
         <View style={styles.pageInfo}>
@@ -1855,14 +1926,6 @@ const styles = StyleSheet.create({
     fontSize: 18,
     color: COLORS.beige,
     flexShrink: 1,
-  },
-  editButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: COLORS.beige,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   editButtonNoBg: {
     width: 32,
@@ -1947,7 +2010,6 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 38,
     left: '50%',
-    transform: [{ translateX: '-50%' }],
     backgroundColor: COLORS.darkBrown,
     paddingHorizontal: 10,
     paddingVertical: 6,
@@ -1955,6 +2017,7 @@ const styles = StyleSheet.create({
     zIndex: 999999,
     alignItems: 'center',
     elevation: 999,
+    transform: [{ translateX: -40 }],
   },
   presenceTooltipText: {
     fontFamily: 'Afacad_400Regular',
@@ -2107,24 +2170,18 @@ const styles = StyleSheet.create({
     zIndex: 10000,
     position: 'relative',
     elevation: 10000,
-  },
-  toolbarScrollView: {
-    backgroundColor: COLORS.lightBrown,
-    maxHeight: 70,
-    overflow: 'visible',
-  },
-  toolbarScrollContent: {
-    paddingHorizontal: 20,
     overflow: 'visible',
   },
   toolbarRow: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: 10,
+    paddingHorizontal: 20,
     gap: 12,
     zIndex: 10000,
     overflow: 'visible',
     elevation: 10000,
+    flexWrap: 'wrap',
   },
   cameraStatusRow: {
     paddingHorizontal: 20,
@@ -2141,74 +2198,22 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 4,
   },
-  gestureButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: COLORS.beige,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 8,
-  },
-  gestureButtonText: {
-    fontFamily: 'Afacad_400Regular',
-    fontSize: 16,
-    color: COLORS.darkBrown,
-  },
-  gestureButtonActive: {
-    backgroundColor: COLORS.darkBrown,
-  },
-  gestureButtonTextActive: {
-    color: COLORS.beige,
-  },
-  rightButtons: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  pageTurnMenuWrapper: {
-    position: 'relative',
-  },
-  pageTurnChevron: {
-    marginLeft: 8,
-  },
-  pageTurnDropdown: {
-    position: 'absolute',
-    top: 46,
-    right: 0,
-    backgroundColor: COLORS.beige,
-    borderRadius: 12,
-    paddingVertical: 6,
-    minWidth: 190,
-    borderWidth: 1,
-    borderColor: '#E2D6C8',
-    zIndex: 20000,
-    shadowColor: '#000',
-    shadowOpacity: 0.12,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 8,
-  },
-  pageTurnDropdownItem: {
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-  },
-  pageTurnDropdownText: {
-    fontFamily: 'Afacad_400Regular',
-    fontSize: 16,
-    color: COLORS.darkBrown,
-  },
   motionMenuWrapper: {
     position: 'relative',
     zIndex: 20000,
     elevation: 20000,
+    overflow: 'visible',
   },
   motionButton: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: COLORS.beige,
     paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 8,
+    paddingVertical: 9,
+    borderRadius: 10,
     gap: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(88,57,47,0.08)',
   },
   motionButtonText: {
     fontFamily: 'Afacad_400Regular',
@@ -2217,44 +2222,42 @@ const styles = StyleSheet.create({
   },
   motionDropdown: {
     position: 'absolute',
-    top: 42,
+    top: 54,
     left: 0,
-    backgroundColor: COLORS.beige,
-    borderRadius: 8,
+    width: 170,
+    maxWidth: 170,
+    alignSelf: 'flex-start',
+    backgroundColor: '#FFFDF8',
+    borderRadius: 14,
     paddingVertical: 6,
-    minWidth: 160,
     borderWidth: 1,
-    borderColor: '#E2D6C8',
-    zIndex: 30000,
-    shadowColor: '#000',
-    shadowOpacity: 0.12,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 30000,
-  },
-  motionDropdownAbsolute: {
-    position: 'absolute',
-    top: 114,
-    backgroundColor: COLORS.beige,
-    borderRadius: 8,
-    paddingVertical: 6,
-    minWidth: 160,
-    borderWidth: 1,
-    borderColor: '#E2D6C8',
+    borderColor: '#E8DDD0',
+    overflow: 'hidden',
     zIndex: 99999,
+    elevation: 99999,
     shadowColor: '#000',
     shadowOpacity: 0.12,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 99999,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
   },
   motionDropdownItem: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    backgroundColor: '#FFFDF8',
+  },
+  motionDropdownItemActive: {
+    backgroundColor: '#F3ECE3',
+  },
+  motionDropdownItemBorder: {
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1E7DB',
   },
   motionDropdownText: {
     fontFamily: 'Afacad_400Regular',
-    fontSize: 14,
+    fontSize: 15,
+    color: COLORS.darkBrown,
+  },
+  motionDropdownTextActive: {
     color: COLORS.darkBrown,
   },
 });
