@@ -5,7 +5,7 @@
  */
 
 export const config = {
-  // ===== Nod Detection Settings =====
+  // ===== Motion Detection Settings =====
   nodDetection: {
     // Show debug overlay on screen (Phase, Delta, Baseline)
     showDebug: false,
@@ -16,6 +16,15 @@ export const config = {
     // Movement thresholds (0-1 scale, where larger = more movement required)
     downThreshold: 0.01,  // How much you need to nod down to trigger
     upThreshold: 0.004,   // How much you need to return up to complete the nod
+
+    // Turn thresholds (horizontal nose movement relative to eyes)
+    turnThreshold: 0.15,
+
+    // Tilt thresholds (vertical eye difference)
+    tiltThreshold: 0.03,
+
+    // Mouth open threshold (distance between lips)
+    mouthThreshold: 0.04,
 
     // Cooldown period in milliseconds between page turns
     cooldownMs: 1200,

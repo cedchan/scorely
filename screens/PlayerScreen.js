@@ -123,9 +123,8 @@ export default function PlayerScreen({ route, navigation }) {
       controlsHeight -
       pageVerticalInset * 2
   );
-
   const gestureDetectionEnabled =
-  backwardMotion !== 'manual' || forwardMotion !== 'manual';
+    backwardMotion !== 'manual' || forwardMotion !== 'manual';
   const measureRegionLookup = useMemo(() => {
     const lookup = new Map();
     pages.forEach((page, pageIndex) => {
@@ -146,10 +145,6 @@ export default function PlayerScreen({ route, navigation }) {
 
   const measurePageRanges = useMemo(() => {
     if (measureRegionLookup.size || !pages.length || !alignmentMappings.length) {
-      return [];
-    }
-
-    if (!pages.length || !alignmentMappings.length) {
       return [];
     }
 
@@ -701,30 +696,30 @@ export default function PlayerScreen({ route, navigation }) {
             const nose = face[1];
             const leftEye = face[33];
             const rightEye = face[263];
-            const upperLip = face[13];
-            const lowerLip = face[14];
-            if (nose && leftEye && rightEye && upperLip && lowerLip) {              const eyeY = (leftEye.y + rightEye.y) / 2;
+
+            if (nose && leftEye && rightEye) {
+              const eyeY = (leftEye.y + rightEye.y) / 2;
               const relativeY = nose.y - eyeY;
               const delta =
                 baselineRelativeYRef.current !== null ? relativeY - baselineRelativeYRef.current : 0;
-              const tiltDelta = leftEye.y - rightEye.y;
-              const faceCenterX = (leftEye.x + rightEye.x) / 2;
-              const turnDelta = nose.x - faceCenterX;
-              const mouthGap = lowerLip.y - upperLip.y;
+
               setDebugInfo(
-                `✓ Face detected\nPhase: ${nodPhaseRef.current}\nNod Δ: ${delta.toFixed(
+                `✓ Face detected\nPhase: ${nodPhaseRef.current}\nDelta: ${delta.toFixed(
                   4
-                )}\nTilt Δ: ${tiltDelta.toFixed(4)}\nTurn Δ: ${turnDelta.toFixed(
-                  4
-                )}\nMouth Gap: ${mouthGap.toFixed(4)}\nBaseline: ${
-                  baselineRelativeYRef.current?.toFixed(4) || 'null'
-                }`
+                )}\nBaseline: ${baselineRelativeYRef.current?.toFixed(4) || 'null'}`
               );
-            
-              handleNodDetection(nose.y, eyeY);
-              handleTiltDetection(leftEye.y, rightEye.y);
-              handleTurnDetection(nose.x, leftEye.x, rightEye.x);
-              handleMouthDetection(upperLip.y, lowerLip.y);
+
+              handleMotionDetection({
+                nose,
+                leftEye,
+                rightEye,
+                forehead: face[10],
+                chin: face[152],
+                eyeY,
+                eyeX: (leftEye.x + rightEye.x) / 2,
+                topLip: face[13],
+                bottomLip: face[14],
+              });
             } else {
               setDebugInfo('✓ Face detected (missing landmarks)');
             }
@@ -803,10 +798,40 @@ export default function PlayerScreen({ route, navigation }) {
     setCurrentPage(pageIndex);
   };
 
-  const handleNodDetection = (noseY, eyeY) => {
-    const relativeY = noseY - eyeY;
+  const triggerMotionAction = (isForward) => {
+    if (isForward) {
+      if (currentPageRef.current < pages.length - 1) {
+        goToPage(currentPageRef.current + 1);
+      }
+    } else {
+      if (currentPageRef.current > 0) {
+        goToPage(currentPageRef.current - 1);
+      }
+    }
+  };
+
+  const handleMotionDetection = ({
+    nose,
+    leftEye,
+    rightEye,
+    forehead,
+    chin,
+    eyeY,
+    eyeX,
+    topLip,
+    bottomLip,
+  }) => {
+    const relativeY = nose.y - eyeY;
     const now = Date.now();
-    const { downThreshold, upThreshold, cooldownMs, baselineSmoothing } = config.nodDetection;
+    const {
+      downThreshold,
+      upThreshold,
+      turnThreshold,
+      tiltThreshold,
+      mouthThreshold,
+      cooldownMs,
+      baselineSmoothing,
+    } = config.nodDetection;
 
     if (baselineRelativeYRef.current === null) {
       baselineRelativeYRef.current = relativeY;
@@ -815,19 +840,40 @@ export default function PlayerScreen({ route, navigation }) {
 
     const delta = relativeY - baselineRelativeYRef.current;
 
-    if (now - lastTurnTimeRef.current < cooldownMs) {
-      return;
-    }
+    // Scaling factors
+    const eyeDist = Math.abs(rightEye.x - leftEye.x);
+    const faceHeight = Math.abs(chin.y - forehead.y);
 
-    if (nodPhaseRef.current === 'idle' && delta > downThreshold) {
-      nodPhaseRef.current = 'down';
-      return;
-    }
+    // 1. Turn Detection (User perspective: turning head Left moves nose to Right in image)
+    const turnFactor = (nose.x - eyeX) / eyeDist;
+    const isTurningLeft = turnFactor > turnThreshold;
+    const isTurningRight = turnFactor < -turnThreshold;
 
-    if (nodPhaseRef.current === 'down' && delta < upThreshold) {
+    // 2. Nod Detection (Stateful, only active when head is relatively centered to avoid cross-talk)
+    const isCentered = Math.abs(turnFactor) < turnThreshold * 0.7;
+    let nodDetected = false;
+
+    if (isCentered) {
+      if (nodPhaseRef.current === 'idle' && delta > downThreshold) {
+        nodPhaseRef.current = 'down';
+      } else if (nodPhaseRef.current === 'down' && delta < upThreshold) {
+        nodPhaseRef.current = 'idle';
+        nodDetected = true;
+      }
+      // Baseline adaptation only when centered
+      baselineRelativeYRef.current =
+        baselineRelativeYRef.current * baselineSmoothing + relativeY * (1 - baselineSmoothing);
+    } else {
+      // Reset nod phase if user turns away mid-nod
       nodPhaseRef.current = 'idle';
-      lastTurnTimeRef.current = now;
+    }
 
+    // Vertical stability check to prevent nods from triggering other gestures
+    const isVerticallyStable = Math.abs(delta) < downThreshold * 0.5 && nodPhaseRef.current === 'idle';
+
+    // Handle nod gesture
+    if (now - lastTurnTimeRef.current >= cooldownMs && isCentered && nodDetected) {
+      lastTurnTimeRef.current = now;
       if (forwardMotion === 'nod' && currentPageRef.current < pages.length - 1) {
         goToPage(currentPageRef.current + 1);
       } else if (backwardMotion === 'nod' && currentPageRef.current > 0) {
@@ -835,8 +881,12 @@ export default function PlayerScreen({ route, navigation }) {
       }
     }
 
-    baselineRelativeYRef.current =
-      baselineRelativeYRef.current * baselineSmoothing + relativeY * (1 - baselineSmoothing);
+    // Call individual gesture handlers when vertically stable
+    if (isVerticallyStable) {
+      handleTurnDetection(nose.x, leftEye.x, rightEye.x);
+      handleTiltDetection(leftEye.y, rightEye.y);
+      handleMouthDetection(topLip?.y || 0, bottomLip?.y || 0);
+    }
   };
   const handleTiltDetection = (leftEyeY, rightEyeY) => {
     const now = Date.now();
