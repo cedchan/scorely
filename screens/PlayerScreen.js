@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Image,
+  Modal,
   Platform,
   Pressable,
   SafeAreaView,
@@ -9,6 +11,7 @@ import {
   StyleSheet,
   Switch,
   Text,
+  TextInput,
   TouchableOpacity,
   useWindowDimensions,
   View,
@@ -18,6 +21,7 @@ import { SvgUri, SvgXml } from 'react-native-svg';
 import { FontAwesomeIcon } from '@fortawesome/react-native-fontawesome';
 import {
   faArrowLeft,
+  faCheck,
   faChevronDown,
   faChevronUp,
   faCopy,
@@ -85,6 +89,10 @@ export default function PlayerScreen({ route, navigation }) {
   const [userId, setUserId] = useState('');
   const [username, setUsername] = useState('');
   const [shareCode, setShareCode] = useState(null);
+  const [didCopyShareCode, setDidCopyShareCode] = useState(false);
+  const [isRenameModalVisible, setIsRenameModalVisible] = useState(false);
+  const [renameInput, setRenameInput] = useState('');
+  const [isRenamingTitle, setIsRenamingTitle] = useState(false);
   const [presentUsers, setPresentUsers] = useState([]);
   const [selectedPresenceUser, setSelectedPresenceUser] = useState(null);
   const [hiddenAnnotationUsers, setHiddenAnnotationUsers] = useState(new Set());
@@ -96,6 +104,7 @@ export default function PlayerScreen({ route, navigation }) {
   const backwardButtonRef = useRef(null);
   const forwardButtonRef = useRef(null);
   const usersButtonRef = useRef(null);
+  const shareCodeCopiedTimerRef = useRef(null);
 
   const measureButtonX = (buttonRef, setter) => {
     if (!buttonRef.current || !toolbarWrapperRef.current) return;
@@ -204,6 +213,14 @@ export default function PlayerScreen({ route, navigation }) {
       setUserId(userId);
       setUsername(username);
     });
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (shareCodeCopiedTimerRef.current) {
+        clearTimeout(shareCodeCopiedTimerRef.current);
+      }
+    };
   }, []);
 
   const normalizePageMeasureRegions = (pageList = []) => {
@@ -1298,28 +1315,58 @@ export default function PlayerScreen({ route, navigation }) {
   const copyShareCode = async () => {
     if (!shareCode) return;
 
-    if (Platform.OS === 'web') {
-      try {
-        await navigator.clipboard.writeText(shareCode);
-        alert('Share code copied to clipboard!');
-      } catch {
-        alert('Failed to copy to clipboard');
-      }
-    } else {
-      alert(`Share code: ${shareCode}`);
+    if (Platform.OS !== 'web' || !navigator?.clipboard?.writeText) {
+      return;
     }
+
+    try {
+      await navigator.clipboard.writeText(shareCode);
+      setDidCopyShareCode(true);
+
+      if (shareCodeCopiedTimerRef.current) {
+        clearTimeout(shareCodeCopiedTimerRef.current);
+      }
+
+      shareCodeCopiedTimerRef.current = setTimeout(() => {
+        setDidCopyShareCode(false);
+        shareCodeCopiedTimerRef.current = null;
+      }, 1500);
+    } catch (error) {
+      console.error('Failed to copy share code:', error);
+    }
+  };
+
+  const openRenameModal = () => {
+    if (!jobId) {
+      Alert.alert('Cannot rename', 'No job ID is available for this score.');
+      return;
+    }
+
+    setRenameInput(title);
+    setIsRenameModalVisible(true);
+  };
+
+  const closeRenameModal = () => {
+    if (isRenamingTitle) {
+      return;
+    }
+
+    setIsRenameModalVisible(false);
+    setRenameInput('');
   };
 
   const handleRename = async () => {
     if (!jobId) {
-      alert('Cannot rename: No job ID available');
+      Alert.alert('Cannot rename', 'No job ID is available for this score.');
       return;
     }
 
-    const newTitle = prompt('Enter new title for this score:', title);
+    const newTitle = renameInput.trim();
     if (!newTitle || newTitle === title) {
       return;
     }
+
+    setIsRenamingTitle(true);
 
     try {
       const response = await fetch(`${apiBaseUrl}/api/score/${jobId}/title`, {
@@ -1332,12 +1379,16 @@ export default function PlayerScreen({ route, navigation }) {
 
       if (response.ok) {
         setTitle(newTitle);
+        setIsRenameModalVisible(false);
+        setRenameInput('');
       } else {
         const data = await response.json();
-        alert(`Failed to rename: ${data.detail || 'Unknown error'}`);
+        Alert.alert('Rename failed', data.detail || 'Unknown error');
       }
     } catch (error) {
-      alert(`Error renaming score: ${error.message}`);
+      Alert.alert('Rename failed', error.message);
+    } finally {
+      setIsRenamingTitle(false);
     }
   };
 
@@ -1516,7 +1567,7 @@ export default function PlayerScreen({ route, navigation }) {
           <Text style={styles.compactTitle} numberOfLines={1}>
             {title}
           </Text>
-          <TouchableOpacity onPress={handleRename} style={styles.editButtonNoBg}>
+          <TouchableOpacity onPress={openRenameModal} style={styles.editButtonNoBg}>
             <FontAwesomeIcon icon={faEdit} size={19} color={COLORS.beige} />
           </TouchableOpacity>
         </View>
@@ -1556,7 +1607,11 @@ export default function PlayerScreen({ route, navigation }) {
                 <Text style={styles.shareCodeText}>{shareCode}</Text>
               </View>
               <TouchableOpacity style={styles.copyButton} onPress={copyShareCode}>
-                <FontAwesomeIcon icon={faCopy} size={14} color={COLORS.darkBrown} />
+                <FontAwesomeIcon
+                  icon={didCopyShareCode ? faCheck : faCopy}
+                  size={14}
+                  color={COLORS.darkBrown}
+                />
               </TouchableOpacity>
             </View>
           )}
@@ -2062,6 +2117,70 @@ export default function PlayerScreen({ route, navigation }) {
           <FontAwesomeIcon icon={faShare} size={18} color={COLORS.darkBrown} />
         </TouchableOpacity>
       </View>
+
+      <Modal
+        animationType="fade"
+        transparent
+        visible={isRenameModalVisible}
+        onRequestClose={closeRenameModal}
+      >
+        <View style={styles.modalOverlay}>
+          <Pressable style={styles.modalBackdrop} onPress={closeRenameModal} />
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <View style={styles.modalIconWrap}>
+                <FontAwesomeIcon icon={faEdit} size={18} color={COLORS.darkBrown} />
+              </View>
+              <Text style={styles.modalTitle}>Rename score</Text>
+              <Text style={styles.modalSubtitle}>
+                Enter a new name for this score.
+              </Text>
+            </View>
+            <View style={styles.modalInputWrap}>
+              <Text style={styles.modalInputLabel}>Title</Text>
+              <TextInput
+                value={renameInput}
+                onChangeText={setRenameInput}
+                placeholder="Score title"
+                placeholderTextColor={COLORS.lightBrown}
+                autoCorrect={false}
+                autoFocus
+                editable={!isRenamingTitle}
+                returnKeyType="done"
+                onSubmitEditing={() => {
+                  if (renameInput.trim()) {
+                    handleRename();
+                  }
+                }}
+                style={styles.modalInput}
+              />
+            </View>
+            <View style={styles.modalActions}>
+              <Pressable
+                style={[styles.modalSecondaryButton, isRenamingTitle && styles.modalButtonDisabled]}
+                onPress={closeRenameModal}
+                disabled={isRenamingTitle}
+              >
+                <Text style={styles.modalSecondaryButtonText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={[
+                  styles.modalPrimaryButton,
+                  (!renameInput.trim() || isRenamingTitle) && styles.modalButtonDisabled,
+                ]}
+                onPress={handleRename}
+                disabled={!renameInput.trim() || isRenamingTitle}
+              >
+                {isRenamingTitle ? (
+                  <ActivityIndicator size="small" color={COLORS.beige} />
+                ) : (
+                  <Text style={styles.modalPrimaryButtonText}>Rename</Text>
+                )}
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -2229,6 +2348,113 @@ const styles = StyleSheet.create({
     transform: [{ scaleX: -1 }],
     borderWidth: 3,
     borderColor: COLORS.darkBrown,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(49, 31, 24, 0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+  },
+  modalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 440,
+    backgroundColor: COLORS.beige,
+    borderRadius: 28,
+    borderWidth: 1,
+    borderColor: '#E3D5C2',
+    padding: 24,
+    shadowColor: '#2B1912',
+    shadowOpacity: 0.14,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 8,
+  },
+  modalHeader: {
+    marginBottom: 20,
+  },
+  modalIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 16,
+    backgroundColor: '#F3F4EC',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 14,
+  },
+  modalTitle: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 28,
+    color: COLORS.darkBrown,
+    marginBottom: 6,
+  },
+  modalSubtitle: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 17,
+    lineHeight: 22,
+    color: COLORS.lightBrown,
+  },
+  modalInputWrap: {
+    marginBottom: 22,
+  },
+  modalInputLabel: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 16,
+    color: COLORS.darkBrown,
+    marginBottom: 8,
+  },
+  modalInput: {
+    backgroundColor: '#F7F1E8',
+    borderWidth: 1,
+    borderColor: '#E3D5C2',
+    borderRadius: 18,
+    paddingHorizontal: 16,
+    paddingVertical: Platform.OS === 'web' ? 13 : 12,
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 18,
+    color: COLORS.darkBrown,
+    ...(Platform.OS === 'web' ? { outlineStyle: 'none' } : {}),
+  },
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 10,
+  },
+  modalSecondaryButton: {
+    borderWidth: 1,
+    borderColor: '#E3D5C2',
+    backgroundColor: '#F7F1E8',
+    borderRadius: 18,
+    paddingHorizontal: 18,
+    paddingVertical: 13,
+    minWidth: 108,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalSecondaryButtonText: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 17,
+    color: COLORS.darkBrown,
+  },
+  modalPrimaryButton: {
+    backgroundColor: COLORS.darkBrown,
+    borderRadius: 18,
+    paddingHorizontal: 18,
+    paddingVertical: 13,
+    minWidth: 128,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalPrimaryButtonText: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 17,
+    color: COLORS.beige,
+  },
+  modalButtonDisabled: {
+    opacity: 0.55,
   },
   musicContainer: {
     flex: 1,

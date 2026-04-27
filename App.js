@@ -44,9 +44,6 @@ export default function App() {
       body,
       #root,
       #root *,
-      input,
-      textarea,
-      [contenteditable="true"],
       img,
       svg,
       svg * {
@@ -61,6 +58,15 @@ export default function App() {
       img,
       svg {
         -webkit-user-drag: none;
+      }
+
+      input,
+      textarea,
+      [contenteditable="true"] {
+        -webkit-user-select: text;
+        -moz-user-select: text;
+        -ms-user-select: text;
+        user-select: text;
       }
 
       html,
@@ -84,7 +90,19 @@ export default function App() {
       }
     };
 
+    const isTextEntryTarget = (target) => {
+      if (!(target instanceof HTMLElement)) {
+        return false;
+      }
+
+      return Boolean(target.closest('input, textarea, [contenteditable="true"]'));
+    };
+
     const preventDoubleTapZoom = (event) => {
+      if (isTextEntryTarget(event.target)) {
+        return;
+      }
+
       const now = Date.now();
       if (now - lastTouchEndTime < 300) {
         event.preventDefault();
@@ -93,6 +111,10 @@ export default function App() {
     };
 
     const clearSelection = () => {
+      if (isTextEntryTarget(document.activeElement)) {
+        return;
+      }
+
       const selection = window.getSelection?.();
       if (selection && selection.rangeCount > 0) {
         selection.removeAllRanges();
@@ -100,11 +122,18 @@ export default function App() {
     };
 
     const preventSelection = (event) => {
+      if (isTextEntryTarget(event.target)) {
+        return;
+      }
       event.preventDefault();
       clearSelection();
     };
 
     const preventDoubleClickZoom = (event) => {
+      if (isTextEntryTarget(event.target)) {
+        return;
+      }
+
       event.preventDefault();
       clearSelection();
     };
@@ -117,7 +146,6 @@ export default function App() {
     document.addEventListener('dblclick', preventDoubleClickZoom, { passive: false, capture: true });
     document.addEventListener('selectstart', preventSelection);
     document.addEventListener('dragstart', preventSelection);
-    document.addEventListener('selectionchange', clearSelection);
 
     return () => {
       document.removeEventListener('gesturestart', preventBrowserZoom);
@@ -128,7 +156,6 @@ export default function App() {
       document.removeEventListener('dblclick', preventDoubleClickZoom, true);
       document.removeEventListener('selectstart', preventSelection);
       document.removeEventListener('dragstart', preventSelection);
-      document.removeEventListener('selectionchange', clearSelection);
       document.documentElement.style.touchAction = previousHtmlTouchAction;
       document.body.style.touchAction = previousBodyTouchAction;
       interactionStyle.remove();

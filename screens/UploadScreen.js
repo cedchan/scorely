@@ -77,10 +77,6 @@ const SCORE_TITLE_OVERRIDES = {
 
 const getDisplayTitle = (title) => SCORE_TITLE_OVERRIDES[title] || title;
 const DEFAULT_PREVIEW_ASPECT_RATIO = 0.707;
-const NON_SELECTABLE_TEXT_INPUT_PROPS = {
-  contextMenuHidden: true,
-  selectTextOnFocus: false,
-};
 
 const buildPreviewUri = (project, apiBaseUrl) => {
   if (!project?.previewImagePath) {
@@ -203,6 +199,9 @@ export default function UploadScreen({ navigation }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [username, setUsernameState] = useState('');
   const [userId, setUserId] = useState('');
+  const [isUsernameModalVisible, setIsUsernameModalVisible] = useState(false);
+  const [usernameInput, setUsernameInput] = useState('');
+  const [isUpdatingUsername, setIsUpdatingUsername] = useState(false);
   const [isJoinModalVisible, setIsJoinModalVisible] = useState(false);
   const [shareCodeInput, setShareCodeInput] = useState('');
   const [isJoiningSharedScore, setIsJoiningSharedScore] = useState(false);
@@ -334,12 +333,40 @@ export default function UploadScreen({ navigation }) {
     });
   };
 
-  const handleEditUsername = () => {
-    const newUsername = prompt('Enter a new username:', username);
-    if (newUsername && newUsername.trim()) {
-      setUsername(newUsername.trim()).then(() => {
-        setUsernameState(newUsername.trim());
-      });
+  const openUsernameModal = () => {
+    setUsernameInput(username);
+    setIsUsernameModalVisible(true);
+  };
+
+  const closeUsernameModal = () => {
+    if (isUpdatingUsername) {
+      return;
+    }
+
+    setIsUsernameModalVisible(false);
+    setUsernameInput('');
+  };
+
+  const confirmUsernameUpdate = async () => {
+    const nextUsername = usernameInput.trim();
+    if (!nextUsername) {
+      return;
+    }
+
+    setIsUpdatingUsername(true);
+    try {
+      const success = await setUsername(nextUsername);
+      if (!success) {
+        throw new Error('Unable to update your username.');
+      }
+
+      setUsernameState(nextUsername);
+      setIsUsernameModalVisible(false);
+      setUsernameInput('');
+    } catch (error) {
+      Alert.alert('Username Error', error.message);
+    } finally {
+      setIsUpdatingUsername(false);
     }
   };
 
@@ -670,7 +697,7 @@ export default function UploadScreen({ navigation }) {
               {username && (
                 <View style={styles.usernameContainer}>
                   <Text style={styles.usernameText}>{username}</Text>
-                  <Pressable onPress={handleEditUsername} style={styles.usernameEditButton}>
+                  <Pressable onPress={openUsernameModal} style={styles.usernameEditButton}>
                     <FontAwesomeIcon icon={faPenToSquare} size={14} color={COLORS.muted} />
                   </Pressable>
                 </View>
@@ -708,7 +735,6 @@ export default function UploadScreen({ navigation }) {
                     onChangeText={setSearchQuery}
                     placeholder="Search library"
                     placeholderTextColor={COLORS.muted}
-                    {...NON_SELECTABLE_TEXT_INPUT_PROPS}
                     style={styles.searchInput}
                   />
                 </View>
@@ -929,7 +955,6 @@ export default function UploadScreen({ navigation }) {
                 editable={!isRenamingScore}
                 returnKeyType="done"
                 onSubmitEditing={() => { if (renameInput.trim()) confirmRename(); }}
-                {...NON_SELECTABLE_TEXT_INPUT_PROPS}
                 style={styles.modalInputNormal}
               />
             </View>
@@ -953,6 +978,70 @@ export default function UploadScreen({ navigation }) {
                   <ActivityIndicator size="small" color={COLORS.card} />
                 ) : (
                   <Text style={styles.modalPrimaryButtonText}>Rename</Text>
+                )}
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        animationType="fade"
+        transparent
+        visible={isUsernameModalVisible}
+        onRequestClose={closeUsernameModal}
+      >
+        <View style={styles.modalOverlay}>
+          <Pressable style={styles.modalBackdrop} onPress={closeUsernameModal} />
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <View style={styles.modalIconWrap}>
+                <FontAwesomeIcon icon={faPenToSquare} size={18} color={COLORS.primary} />
+              </View>
+              <Text style={styles.modalTitle}>Edit username</Text>
+              <Text style={styles.modalSubtitle}>
+                Enter the name you want other collaborators to see.
+              </Text>
+            </View>
+            <View style={styles.modalInputWrap}>
+              <Text style={styles.modalInputLabel}>Username</Text>
+              <TextInput
+                value={usernameInput}
+                onChangeText={setUsernameInput}
+                placeholder="Your username"
+                placeholderTextColor={COLORS.muted}
+                autoCorrect={false}
+                autoFocus
+                editable={!isUpdatingUsername}
+                returnKeyType="done"
+                onSubmitEditing={() => {
+                  if (usernameInput.trim()) {
+                    confirmUsernameUpdate();
+                  }
+                }}
+                style={styles.modalInputNormal}
+              />
+            </View>
+            <View style={styles.modalActions}>
+              <Pressable
+                style={[styles.modalSecondaryButton, isUpdatingUsername && styles.buttonDisabled]}
+                onPress={closeUsernameModal}
+                disabled={isUpdatingUsername}
+              >
+                <Text style={styles.modalSecondaryButtonText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={[
+                  styles.modalPrimaryButton,
+                  (!usernameInput.trim() || isUpdatingUsername) && styles.buttonDisabled,
+                ]}
+                onPress={confirmUsernameUpdate}
+                disabled={!usernameInput.trim() || isUpdatingUsername}
+              >
+                {isUpdatingUsername ? (
+                  <ActivityIndicator size="small" color={COLORS.card} />
+                ) : (
+                  <Text style={styles.modalPrimaryButtonText}>Save</Text>
                 )}
               </Pressable>
             </View>
@@ -1000,7 +1089,6 @@ export default function UploadScreen({ navigation }) {
                     joinSharedScore(shareCodeInput);
                   }
                 }}
-                {...NON_SELECTABLE_TEXT_INPUT_PROPS}
                 style={styles.modalInput}
               />
             </View>

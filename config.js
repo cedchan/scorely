@@ -33,6 +33,12 @@ export const config = {
     baselineSmoothing: 0.9,
   },
 
+  // ===== Annotation Debug Settings =====
+  annotationDebug: {
+    // Show the web ink diagnostics overlay while drawing annotations
+    showInkDebug: false,
+  },
+
   // ===== Add more settings here as needed =====
 };
 
