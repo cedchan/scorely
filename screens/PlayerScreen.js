@@ -1579,18 +1579,17 @@ export default function PlayerScreen({ route, navigation }) {
                 <View key={user.user_id} style={styles.presenceWrapper}>
                   <TouchableOpacity
                     style={styles.presenceAvatar}
-                    onPress={() =>
+                    onPress={config.presence.showTooltipOnTap ? () =>
                       setSelectedPresenceUser(
                         selectedPresenceUser === user.user_id ? null : user.user_id
-                      )
-                    }
+                      ) : undefined}
                   >
                     <Text style={styles.presenceAvatarText}>
                       {user.username?.charAt(0).toUpperCase() || '?'}
                     </Text>
                   </TouchableOpacity>
 
-                  {selectedPresenceUser === user.user_id && (
+                  {config.presence.showTooltipOnTap && selectedPresenceUser === user.user_id && (
                     <View style={styles.presenceTooltip}>
                       <Text style={styles.presenceTooltipText}>{user.username}</Text>
                     </View>
@@ -1769,7 +1768,10 @@ export default function PlayerScreen({ route, navigation }) {
             return a.username.localeCompare(b.username);
           });
           return (
-            <View style={[styles.visibilityDropdown, { left: usersMenuLayout.x }]}>
+            <View
+              style={[styles.visibilityDropdown, { left: usersMenuLayout.x }]}
+              onStartShouldSetResponder={() => true}
+            >
               {usersWithAnnotations.length > 0 ? (
                 usersWithAnnotations.map((user) => (
                   <View key={user.user_id} style={styles.visibilityRow}>

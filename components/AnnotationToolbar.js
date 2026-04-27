@@ -67,7 +67,7 @@ export default function AnnotationToolbar({
         >
           <FontAwesomeIcon icon={faEye} size={16} color={COLORS.darkBrown} />
           <Text style={styles.visibilityButtonText}>Users</Text>
-          <FontAwesomeIcon icon={faChevronDown} size={12} color={COLORS.darkBrown} />
+          <FontAwesomeIcon icon={showUserVisibilityDropdown ? faChevronUp : faChevronDown} size={12} color={COLORS.darkBrown} />
         </TouchableOpacity>
       </View>
 

@@ -486,7 +486,7 @@ export default function AnnotationLayer({
       canvas.style.height = `${height}px`;
     }
 
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { desynchronized: true });
     if (!ctx) {
       return null;
     }
@@ -854,11 +854,11 @@ export default function AnnotationLayer({
       event.preventDefault();
     };
 
-    const supportsTouch =
-      typeof window !== 'undefined' &&
-      ('ontouchstart' in window ||
-        (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0));
-    const defaultInputMode = supportsTouch ? 'touch' : 'pointer';
+    // Prefer pointer events over touch events: pointer events support getCoalescedEvents(),
+    // which delivers sub-frame Apple Pencil samples (~120 Hz on iPad Pro). Touch events
+    // only fire once per display frame (~60 Hz) and have no coalescing API.
+    const supportsPointer = typeof window !== 'undefined' && typeof window.PointerEvent !== 'undefined';
+    const defaultInputMode = supportsPointer ? 'pointer' : 'touch';
     if (!debugMetricsRef.current.strokeActive) {
       debugMetricsRef.current = {
         ...debugMetricsRef.current,
@@ -940,7 +940,8 @@ export default function AnnotationLayer({
       event.preventDefault();
 
       const point = getRelativePoint(event);
-      startInteractionAt(point.x, point.y, 'pointer');
+      const inputMode = event.pointerType === 'pen' ? 'pointer-pen' : event.pointerType === 'touch' ? 'pointer-touch' : 'pointer';
+      startInteractionAt(point.x, point.y, inputMode);
     };
 
     const handlePointerMove = (event) => {
@@ -957,6 +958,42 @@ export default function AnnotationLayer({
         return buildNormalizedPoint(point.x, point.y);
       });
       moveInteractionPoints(points, sourceEvents.length);
+
+      // Draw predicted points as a faint lookahead — they get overwritten on the next real move
+      if (currentToolRef.current === 'pen' && liveCanvasRef.current) {
+        const predicted =
+          typeof event.getPredictedEvents === 'function' ? event.getPredictedEvents() : [];
+        if (predicted.length) {
+          const predictedPoints = predicted.map((pe) => {
+            const point = getRelativePoint(pe);
+            return buildNormalizedPoint(point.x, point.y);
+          });
+          const allPoints = [...currentPathPointsRef.current, ...predictedPoints];
+          const ctx = liveCanvasRef.current.getContext('2d', { desynchronized: true });
+          if (ctx) {
+            const dpr = window.devicePixelRatio || 1;
+            ctx.save();
+            ctx.strokeStyle = currentColorRef.current;
+            ctx.lineWidth = currentStrokeWidthRef.current;
+            ctx.globalAlpha = 0.4;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            if (tracePolylineOnCanvas(
+              ctx,
+              allPoints,
+              normalizeWidthRef.current,
+              normalizeHeightRef.current,
+              imageOffsetXRef.current,
+              imageOffsetYRef.current,
+              Math.max(0, currentPathPointsRef.current.length - 1)
+            )) {
+              ctx.stroke();
+            }
+            ctx.restore();
+          }
+        }
+      }
     };
 
     const finishPointer = (event, cancel = false) => {
@@ -983,32 +1020,32 @@ export default function AnnotationLayer({
     const handlePointerCancel = (event) => finishPointer(event, true);
     const handleTouchCancel = (event) => finishTouch(event, true);
 
-    if (supportsTouch) {
-      element.addEventListener('touchstart', handleTouchStart, touchOptions);
-      element.addEventListener('touchmove', handleTouchMove, touchOptions);
-      element.addEventListener('touchend', finishTouch, touchOptions);
-      element.addEventListener('touchcancel', handleTouchCancel, touchOptions);
-    } else {
+    if (supportsPointer) {
       element.addEventListener('pointerdown', handlePointerDown);
       element.addEventListener('pointermove', handlePointerMove);
       element.addEventListener('pointerup', handlePointerUp);
       element.addEventListener('pointercancel', handlePointerCancel);
+    } else {
+      element.addEventListener('touchstart', handleTouchStart, touchOptions);
+      element.addEventListener('touchmove', handleTouchMove, touchOptions);
+      element.addEventListener('touchend', finishTouch, touchOptions);
+      element.addEventListener('touchcancel', handleTouchCancel, touchOptions);
     }
     element.addEventListener('contextmenu', preventNativeUi, touchOptions);
     element.addEventListener('selectstart', preventNativeUi, touchOptions);
     element.addEventListener('dragstart', preventNativeUi, touchOptions);
 
     return () => {
-      if (supportsTouch) {
-        element.removeEventListener('touchstart', handleTouchStart, touchOptions);
-        element.removeEventListener('touchmove', handleTouchMove, touchOptions);
-        element.removeEventListener('touchend', finishTouch, touchOptions);
-        element.removeEventListener('touchcancel', handleTouchCancel, touchOptions);
-      } else {
+      if (supportsPointer) {
         element.removeEventListener('pointerdown', handlePointerDown);
         element.removeEventListener('pointermove', handlePointerMove);
         element.removeEventListener('pointerup', handlePointerUp);
         element.removeEventListener('pointercancel', handlePointerCancel);
+      } else {
+        element.removeEventListener('touchstart', handleTouchStart, touchOptions);
+        element.removeEventListener('touchmove', handleTouchMove, touchOptions);
+        element.removeEventListener('touchend', finishTouch, touchOptions);
+        element.removeEventListener('touchcancel', handleTouchCancel, touchOptions);
       }
       element.removeEventListener('contextmenu', preventNativeUi, touchOptions);
       element.removeEventListener('selectstart', preventNativeUi, touchOptions);

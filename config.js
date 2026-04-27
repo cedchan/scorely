@@ -33,10 +33,16 @@ export const config = {
     baselineSmoothing: 0.9,
   },
 
+  // ===== Presence Settings =====
+  presence: {
+    // Show a username tooltip when tapping a user's presence avatar
+    showTooltipOnTap: false,
+  },
+
   // ===== Annotation Debug Settings =====
   annotationDebug: {
     // Show the web ink diagnostics overlay while drawing annotations
-    showInkDebug: false,
+    showInkDebug: true,
   },
 
   // ===== Add more settings here as needed =====
