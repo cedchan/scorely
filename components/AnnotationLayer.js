@@ -8,6 +8,46 @@ const COLORS = {
   darkBrown: '#58392F',
 };
 
+// Pure function — safe to call outside component, including at freeze time on release
+function pointsToPathStringStatic(points, normalizeWidth, normalizeHeight, imageOffsetX, imageOffsetY) {
+  if (!points || points.length === 0) return '';
+
+  const px = points.map((p) => ({
+    x: (p.x / 100) * normalizeWidth + imageOffsetX,
+    y: (p.y / 100) * normalizeHeight + imageOffsetY,
+  }));
+
+  const first = px[0];
+  let d = `M ${first.x} ${first.y}`;
+
+  if (px.length === 1) {
+    d += ` L ${first.x} ${first.y}`;
+    return d;
+  }
+
+  if (px.length === 2) {
+    d += ` L ${px[1].x} ${px[1].y}`;
+    return d;
+  }
+
+  // Catmull-Rom → cubic bezier
+  for (let i = 0; i < px.length - 1; i++) {
+    const p0 = px[Math.max(i - 1, 0)];
+    const p1 = px[i];
+    const p2 = px[i + 1];
+    const p3 = px[Math.min(i + 2, px.length - 1)];
+
+    const cp1x = p1.x + (p2.x - p0.x) / 6;
+    const cp1y = p1.y + (p2.y - p0.y) / 6;
+    const cp2x = p2.x - (p3.x - p1.x) / 6;
+    const cp2y = p2.y - (p3.y - p1.y) / 6;
+
+    d += ` C ${cp1x} ${cp1y} ${cp2x} ${cp2y} ${p2.x} ${p2.y}`;
+  }
+
+  return d;
+}
+
 export default function AnnotationLayer({
   pageNumber,
   width,
@@ -41,48 +81,65 @@ export default function AnnotationLayer({
   const pendingUpdateRef = useRef(null);
   const eraserRadius = 20;
 
-  // Keep ref updated with current points
-  useEffect(() => {
-    currentPathPointsRef.current = currentPathPoints;
-  }, [currentPathPoints]);
+  // Refs that mirror props — keep panResponder stable (no mid-stroke recreations)
+  const enabledRef = useRef(enabled);
+  const currentToolRef = useRef(currentTool);
+  const currentColorRef = useRef(currentColor);
+  const currentStrokeWidthRef = useRef(currentStrokeWidth);
+  const pageNumberRef = useRef(pageNumber);
+  const currentUserIdRef = useRef(currentUserId);
+  const onAnnotationUpdatedRef = useRef(onAnnotationUpdated);
+  const annotationsRef = useRef(annotations);
+  const normalizeWidthRef = useRef(normalizeWidth);
+  const normalizeHeightRef = useRef(normalizeHeight);
+  const imageOffsetXRef = useRef(imageOffsetX);
+  const imageOffsetYRef = useRef(imageOffsetY);
 
-  const sendLiveUpdate = (points) => {
-    if (!onAnnotationUpdated || !tempAnnotationIdRef.current) return;
+  // Sync all prop-refs every render (no extra effects, just assignments)
+  enabledRef.current = enabled;
+  currentToolRef.current = currentTool;
+  currentColorRef.current = currentColor;
+  currentStrokeWidthRef.current = currentStrokeWidth;
+  pageNumberRef.current = pageNumber;
+  currentUserIdRef.current = currentUserId;
+  onAnnotationUpdatedRef.current = onAnnotationUpdated;
+  annotationsRef.current = annotations;
+  normalizeWidthRef.current = normalizeWidth;
+  normalizeHeightRef.current = normalizeHeight;
+  imageOffsetXRef.current = imageOffsetX;
+  imageOffsetYRef.current = imageOffsetY;
 
-    const tempAnnotation = {
+  const sendLiveUpdate = useRef((points) => {
+    if (!onAnnotationUpdatedRef.current || !tempAnnotationIdRef.current) return;
+    onAnnotationUpdatedRef.current({
       id: tempAnnotationIdRef.current,
       job_id: '',
-      page_number: pageNumber,
+      page_number: pageNumberRef.current,
       type: 'path',
-      user_id: currentUserId,
+      user_id: currentUserIdRef.current,
       timestamp: Date.now() / 1000,
       path: {
         points,
-        color: currentColor,
-        strokeWidth: currentStrokeWidth,
+        color: currentColorRef.current,
+        strokeWidth: currentStrokeWidthRef.current,
         opacity: 1.0,
       },
-      _isTemp: true, // Flag to indicate this is a temporary live update
-    };
+      _isTemp: true,
+    });
+  }).current;
 
-    onAnnotationUpdated(tempAnnotation);
-  };
-
-  const sendThrottledLiveUpdate = (points) => {
+  const sendThrottledLiveUpdate = useRef((points) => {
     const now = Date.now();
     const timeSinceLastUpdate = now - lastUpdateTimeRef.current;
-    const UPDATE_INTERVAL = 16; // ~60fps (16ms)
+    const UPDATE_INTERVAL = 16;
 
-    // Store pending update
     pendingUpdateRef.current = points;
 
-    // If enough time has passed, send immediately
     if (timeSinceLastUpdate >= UPDATE_INTERVAL) {
       sendLiveUpdate(points);
       lastUpdateTimeRef.current = now;
       pendingUpdateRef.current = null;
     } else {
-      // Schedule update for next interval
       if (!updateThrottleRef.current) {
         updateThrottleRef.current = setTimeout(() => {
           if (pendingUpdateRef.current) {
@@ -94,12 +151,12 @@ export default function AnnotationLayer({
         }, UPDATE_INTERVAL - timeSinceLastUpdate);
       }
     }
-  };
+  }).current;
 
-  const checkForAnnotationsToErase = (x, y) => {
-    const eraserRadius = 20; // pixels
-    const pageAnnotations = annotations.filter(
-      (ann) => ann.page_number === pageNumber
+  const checkForAnnotationsToErase = useRef((x, y) => {
+    const eraseRadius = 20;
+    const pageAnnotations = annotationsRef.current.filter(
+      (ann) => ann.page_number === pageNumberRef.current
     );
 
     pageAnnotations.forEach((annotation) => {
@@ -108,55 +165,58 @@ export default function AnnotationLayer({
         return;
       }
 
-      // Check if eraser touches this annotation
       if (annotation.type === 'path' && annotation.path) {
-        const touched = annotation.path.points.some((point) => {
-          // Convert point from percentage to pixels using image dimensions, then add offset
-          const pointX = (point.x / 100) * normalizeWidth + imageOffsetX;
-          const pointY = (point.y / 100) * normalizeHeight + imageOffsetY;
-          const distance = Math.sqrt(
-            Math.pow(pointX - x, 2) + Math.pow(pointY - y, 2)
-          );
-          return distance < eraserRadius;
+        const nw = normalizeWidthRef.current;
+        const nh = normalizeHeightRef.current;
+        const ox = imageOffsetXRef.current;
+        const oy = imageOffsetYRef.current;
+        const pts = annotation.path.points.map((p) => ({
+          x: (p.x / 100) * nw + ox,
+          y: (p.y / 100) * nh + oy,
+        }));
+
+        const distToSegment = (px, py, ax, ay, bx, by) => {
+          const dx = bx - ax; const dy = by - ay;
+          const lenSq = dx * dx + dy * dy;
+          if (lenSq === 0) return Math.sqrt((px - ax) ** 2 + (py - ay) ** 2);
+          const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lenSq));
+          return Math.sqrt((px - (ax + t * dx)) ** 2 + (py - (ay + t * dy)) ** 2);
+        };
+
+        const touched = pts.some((pt, i) => {
+          if (i === 0) return Math.sqrt((pt.x - x) ** 2 + (pt.y - y) ** 2) < eraseRadius;
+          return distToSegment(x, y, pts[i - 1].x, pts[i - 1].y, pt.x, pt.y) < eraseRadius;
         });
 
-        if (touched && onAnnotationUpdated) {
+        if (touched && onAnnotationUpdatedRef.current) {
           annotationsToEraseRef.current.push(annotation.id);
-          // Mark for deletion
-          const deletedAnnotation = { ...annotation, _deleted: true };
-          onAnnotationUpdated(deletedAnnotation);
+          onAnnotationUpdatedRef.current({ ...annotation, _deleted: true });
         }
       }
     });
-  };
+  }).current;
 
+  // panResponder is created once and never recreated — all values read via refs
   const panResponder = useMemo(() => PanResponder.create({
-    onStartShouldSetPanResponder: () => enabled,
-    onMoveShouldSetPanResponder: () => enabled,
+    onStartShouldSetPanResponder: () => enabledRef.current,
+    onMoveShouldSetPanResponder: () => enabledRef.current,
 
     onPanResponderGrant: (event) => {
-      if (!enabled) return;
-
+      if (!enabledRef.current) return;
       const { locationX, locationY } = event.nativeEvent;
 
-      if (currentTool === 'pen') {
-        // Adjust for image offset and store as percentages relative to image dimensions
-        const adjustedX = locationX - imageOffsetX;
-        const adjustedY = locationY - imageOffsetY;
-
+      if (currentToolRef.current === 'pen') {
+        const adjustedX = locationX - imageOffsetXRef.current;
+        const adjustedY = locationY - imageOffsetYRef.current;
         const initialPoints = [{
-          x: (adjustedX / normalizeWidth) * 100,
-          y: (adjustedY / normalizeHeight) * 100
+          x: (adjustedX / normalizeWidthRef.current) * 100,
+          y: (adjustedY / normalizeHeightRef.current) * 100,
         }];
+        currentPathPointsRef.current = initialPoints;
         setCurrentPathPoints(initialPoints);
-
-        // Create temporary annotation ID
         tempAnnotationIdRef.current = `temp-${Date.now()}`;
-
-        // Send initial live update
         sendLiveUpdate(initialPoints);
-      } else if (currentTool === 'eraser') {
-        // Start tracking annotations to erase
+      } else if (currentToolRef.current === 'eraser') {
         annotationsToEraseRef.current = [];
         setEraserPosition({ x: locationX, y: locationY });
         checkForAnnotationsToErase(locationX, locationY);
@@ -164,110 +224,83 @@ export default function AnnotationLayer({
     },
 
     onPanResponderMove: (event) => {
-      if (!enabled) return;
-
+      if (!enabledRef.current) return;
       const { locationX, locationY } = event.nativeEvent;
 
-      if (currentTool === 'pen') {
-        // Adjust for image offset and store as percentages relative to image dimensions
-        const adjustedX = locationX - imageOffsetX;
-        const adjustedY = locationY - imageOffsetY;
-
+      if (currentToolRef.current === 'pen') {
+        const adjustedX = locationX - imageOffsetXRef.current;
+        const adjustedY = locationY - imageOffsetYRef.current;
         const newPoints = [
           ...currentPathPointsRef.current,
           {
-            x: (adjustedX / normalizeWidth) * 100,
-            y: (adjustedY / normalizeHeight) * 100
+            x: (adjustedX / normalizeWidthRef.current) * 100,
+            y: (adjustedY / normalizeHeightRef.current) * 100,
           },
         ];
+        currentPathPointsRef.current = newPoints;
         setCurrentPathPoints(newPoints);
-
-        // Send throttled live update
         sendThrottledLiveUpdate(newPoints);
-      } else if (currentTool === 'eraser') {
+      } else if (currentToolRef.current === 'eraser') {
         setEraserPosition({ x: locationX, y: locationY });
         checkForAnnotationsToErase(locationX, locationY);
       }
     },
 
     onPanResponderRelease: () => {
-      if (!enabled) return;
+      if (!enabledRef.current) return;
 
-      if (currentTool === 'pen' && currentPathPointsRef.current.length > 0) {
-        // Clear throttle timer
+      if (currentToolRef.current === 'pen' && currentPathPointsRef.current.length > 0) {
         if (updateThrottleRef.current) {
           clearTimeout(updateThrottleRef.current);
           updateThrottleRef.current = null;
         }
 
-        // Send final version as an update (since temp versions already exist)
-        const annotation = {
+        const finalPoints = currentPathPointsRef.current;
+        const frozenPathString = pointsToPathStringStatic(
+          finalPoints,
+          normalizeWidthRef.current,
+          normalizeHeightRef.current,
+          imageOffsetXRef.current,
+          imageOffsetYRef.current
+        );
+
+        onAnnotationUpdatedRef.current({
           id: tempAnnotationIdRef.current,
-          job_id: '', // Will be set by parent
-          page_number: pageNumber,
+          job_id: '',
+          page_number: pageNumberRef.current,
           type: 'path',
-          user_id: currentUserId,
+          user_id: currentUserIdRef.current,
           timestamp: Date.now() / 1000,
           path: {
-            points: currentPathPointsRef.current,
-            color: currentColor,
-            strokeWidth: currentStrokeWidth,
+            points: finalPoints,
+            color: currentColorRef.current,
+            strokeWidth: currentStrokeWidthRef.current,
             opacity: 1.0,
+            _frozenPathString: frozenPathString,
           },
-          _isFinal: true, // Flag to indicate this is the final version
-        };
+          _isFinal: true,
+        });
 
-        // Use onAnnotationUpdated for final version to preserve the annotation
-        // and signal that drawing is complete
-        onAnnotationUpdated(annotation);
-
-        // Clear current path
+        currentPathPointsRef.current = [];
         setCurrentPathPoints([]);
         tempAnnotationIdRef.current = null;
-      } else if (currentTool === 'eraser') {
-        // Annotations were already erased during the gesture
+      } else if (currentToolRef.current === 'eraser') {
         annotationsToEraseRef.current = [];
         setEraserPosition(null);
       }
     },
 
     onPanResponderTerminate: () => {
-      // Reset on gesture cancel
+      currentPathPointsRef.current = [];
       setCurrentPathPoints([]);
       annotationsToEraseRef.current = [];
       setEraserPosition(null);
     },
-  }), [
-    enabled,
-    currentTool,
-    currentColor,
-    currentStrokeWidth,
-    pageNumber,
-    onAnnotationCreated,
-    onAnnotationUpdated,
-    width,
-    height,
-    annotations, // Needed for checkForAnnotationsToErase
-  ]);
+  }), []);  // Empty deps — stable forever, reads via refs
 
-  // Convert points array to SVG path string, converting from percentages to pixels
-  const pointsToPathString = (points) => {
-    if (!points || points.length === 0) return '';
-
-    // Convert first point from percentage to pixels using image dimensions, then add offset
-    const firstX = (points[0].x / 100) * normalizeWidth + imageOffsetX;
-    const firstY = (points[0].y / 100) * normalizeHeight + imageOffsetY;
-    let pathString = `M ${firstX} ${firstY}`;
-
-    for (let i = 1; i < points.length; i++) {
-      // Convert each point from percentage to pixels using image dimensions, then add offset
-      const px = (points[i].x / 100) * normalizeWidth + imageOffsetX;
-      const py = (points[i].y / 100) * normalizeHeight + imageOffsetY;
-      pathString += ` L ${px} ${py}`;
-    }
-
-    return pathString;
-  };
+  // Catmull-Rom → cubic bezier, parameterized (used both inline and at freeze time)
+  const pointsToPathString = (points) =>
+    pointsToPathStringStatic(points, normalizeWidth, normalizeHeight, imageOffsetX, imageOffsetY);
 
   // Filter annotations for current page and visible users
   const pageAnnotations = annotations.filter((ann) => {
@@ -282,57 +315,52 @@ export default function AnnotationLayer({
     return user?.username || 'Unknown';
   };
 
-  // Track which annotations are actively being drawn (received updates recently)
-  const activeDrawingRef = useRef(new Map()); // Map<annotationId, lastUpdateTime>
+  const NAMETAG_LINGER_MS = 800;
+
+  // activeDrawingRef: Map<id, lastUpdateTime> — id present = nametag visible
+  const activeDrawingRef = useRef(new Map());
+  // lingerTimersRef: Map<id, timeoutId> — pending linger timers
+  const lingerTimersRef = useRef(new Map());
   const [, forceRender] = useState(0);
 
   useEffect(() => {
     const now = Date.now();
 
-    // Log all remote annotations and their _isTemp status
-    const remoteAnnotations = pageAnnotations.filter(a =>
-      a.type === 'path' && a.user_id !== currentUserId
-    );
-
-    if (remoteAnnotations.length > 0) {
-      console.log('[AnnotationLayer] Remote annotations details:');
-      remoteAnnotations.forEach((a, idx) => {
-        console.log(`  [${idx}] id=${a.id}, _isTemp=${a._isTemp}, _isFinal=${a._isFinal}, hasFlag=${a.hasOwnProperty('_isTemp')}, points=${a.path?.points?.length}`);
-        console.log(`       Full keys:`, Object.keys(a));
-      });
-    }
-
-    // Update timestamps for annotations with _isTemp flag
     pageAnnotations.forEach((annotation) => {
-      if (annotation.type === 'path' &&
-          annotation.user_id !== currentUserId &&
-          annotation._isTemp === true) {
-        console.log('Setting active drawing timestamp for:', annotation.id);
+      if (annotation.type !== 'path' || annotation.user_id === currentUserId) return;
+
+      if (annotation._isTemp === true) {
+        // Cancel any pending linger timer — stroke is still in progress
+        if (lingerTimersRef.current.has(annotation.id)) {
+          clearTimeout(lingerTimersRef.current.get(annotation.id));
+          lingerTimersRef.current.delete(annotation.id);
+        }
         activeDrawingRef.current.set(annotation.id, now);
+      } else if (activeDrawingRef.current.has(annotation.id) && !lingerTimersRef.current.has(annotation.id)) {
+        // Stroke just committed — start linger timer
+        const timer = setTimeout(() => {
+          activeDrawingRef.current.delete(annotation.id);
+          lingerTimersRef.current.delete(annotation.id);
+          forceRender((prev) => prev + 1);
+        }, NAMETAG_LINGER_MS);
+        lingerTimersRef.current.set(annotation.id, timer);
       }
     });
 
-    console.log('Active drawing map:', Array.from(activeDrawingRef.current.keys()));
-
-    // Clean up annotations that haven't been updated in 500ms
-    const timeout = setTimeout(() => {
-      const cleanupTime = Date.now();
-      let hasChanges = false;
-
+    // Fallback: clear stale entries that never got a final update (e.g. disconnected user)
+    const fallback = setTimeout(() => {
+      const cutoff = Date.now();
+      let changed = false;
       activeDrawingRef.current.forEach((timestamp, id) => {
-        if (cleanupTime - timestamp > 500) {
-          console.log('Removing from active drawing:', id);
+        if (cutoff - timestamp > 1500 && !lingerTimersRef.current.has(id)) {
           activeDrawingRef.current.delete(id);
-          hasChanges = true;
+          changed = true;
         }
       });
+      if (changed) forceRender((prev) => prev + 1);
+    }, 1500);
 
-      if (hasChanges) {
-        forceRender(prev => prev + 1);
-      }
-    }, 500);
-
-    return () => clearTimeout(timeout);
+    return () => clearTimeout(fallback);
   }, [pageAnnotations, currentUserId]);
 
   // Find remote temp annotations - only show while actively drawing
@@ -356,7 +384,7 @@ export default function AnnotationLayer({
         {/* Render saved annotations */}
         {pageAnnotations.map((annotation) => {
           if (annotation.type === 'path' && annotation.path) {
-            const pathString = pointsToPathString(annotation.path.points);
+            const pathString = annotation.path._frozenPathString || pointsToPathString(annotation.path.points);
 
             return (
               <Path
@@ -455,22 +483,23 @@ export default function AnnotationLayer({
         )}
       </Svg>
 
-      {/* Username labels overlay - rendered outside SVG for proper z-index */}
+      {/* Username labels — clamped to stay within the drawing area */}
       {remoteTempAnnotations.map((annotation) => {
         const lastPoint = annotation.path.points[annotation.path.points.length - 1];
-        const labelX = (lastPoint.x / 100) * normalizeWidth + imageOffsetX;
-        const labelY = (lastPoint.y / 100) * normalizeHeight + imageOffsetY;
+        const rawX = (lastPoint.x / 100) * normalizeWidth + imageOffsetX;
+        const rawY = (lastPoint.y / 100) * normalizeHeight + imageOffsetY;
+
+        const LABEL_W = 110;
+        const LABEL_H = 24;
+        const MARGIN = 6;
+
+        const labelLeft = Math.min(Math.max(rawX + 10, MARGIN), width - LABEL_W - MARGIN);
+        const labelTop = Math.min(Math.max(rawY - LABEL_H - 4, MARGIN), height - LABEL_H - MARGIN);
 
         return (
           <View
             key={`label-${annotation.id}`}
-            style={[
-              styles.usernameLabel,
-              {
-                left: labelX + 10,
-                top: labelY - 25,
-              },
-            ]}
+            style={[styles.usernameLabel, { left: labelLeft, top: labelTop }]}
             pointerEvents="none"
           >
             <Text style={styles.usernameLabelText}>

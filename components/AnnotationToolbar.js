@@ -53,88 +53,22 @@ export default function AnnotationToolbar({
   showUserVisibilityDropdown = false,
   onToggleDropdown = () => {},
   onToggleUserVisibility = () => {},
-  renderDropdownOutside = false,
+  usersButtonRef = null,
+  onUsersButtonLayout = () => {},
 }) {
 
-  // Get all unique users who have made annotations
-  const usersWithAnnotations = Array.from(
-    new Set(annotations.map(ann => ann.user_id).filter(Boolean))
-  ).map(userId => {
-    const isCurrentUser = userId === currentUserId;
-    const user = presentUsers.find(u => u.user_id === userId);
-
-    // For current user, use currentUsername prop if not in presentUsers
-    let username = user?.username;
-    if (!username && isCurrentUser) {
-      username = currentUsername || 'Me';
-    } else if (!username) {
-      username = 'Unknown User';
-    }
-
-    return {
-      user_id: userId,
-      username: username,
-      isCurrentUser: isCurrentUser,
-    };
-  }).sort((a, b) => {
-    // Current user first, then alphabetically
-    if (a.isCurrentUser) return -1;
-    if (b.isCurrentUser) return 1;
-    return a.username.localeCompare(b.username);
-  });
-
-  // Debug logging
-  console.log('[AnnotationToolbar] Total annotations:', annotations.length);
-  if (annotations.length > 0) {
-    console.log('[AnnotationToolbar] First annotation:', annotations[0]);
-  }
-  console.log('[AnnotationToolbar] Users with annotations:', usersWithAnnotations);
-  console.log('[AnnotationToolbar] Current user ID:', currentUserId);
-  console.log('[AnnotationToolbar] Present users:', presentUsers);
   return (
     <View style={styles.container}>
-      {/* User Visibility Toggle - Before Enable/Disable */}
-      <View style={styles.visibilityContainer}>
+      {/* User Visibility Toggle */}
+      <View ref={usersButtonRef} style={styles.visibilityContainer} onLayout={onUsersButtonLayout}>
         <TouchableOpacity
           style={styles.visibilityButton}
           onPress={() => onToggleDropdown(!showUserVisibilityDropdown)}
         >
           <FontAwesomeIcon icon={faEye} size={16} color={COLORS.darkBrown} />
           <Text style={styles.visibilityButtonText}>Users</Text>
-          <FontAwesomeIcon
-            icon={showUserVisibilityDropdown ? faChevronUp : faChevronDown}
-            size={12}
-            color={COLORS.darkBrown}
-          />
+          <FontAwesomeIcon icon={faChevronDown} size={12} color={COLORS.darkBrown} />
         </TouchableOpacity>
-
-        {!renderDropdownOutside && showUserVisibilityDropdown && (
-          <View
-            style={styles.visibilityDropdown}
-            onStartShouldSetResponder={() => true}
-            onResponderRelease={(e) => e.stopPropagation()}
-          >
-            {usersWithAnnotations.length > 0 ? (
-              usersWithAnnotations.map((user) => (
-                <View key={user.user_id} style={styles.visibilityRow}>
-                  <Text style={styles.visibilityUsername}>
-                    {user.username}{user.isCurrentUser ? ' (Me)' : ''}
-                  </Text>
-                  <Switch
-                    value={!hiddenAnnotationUsers.has(user.user_id)}
-                    onValueChange={() => onToggleUserVisibility(user.user_id)}
-                    trackColor={{ false: COLORS.lightBrown, true: COLORS.darkBrown }}
-                    thumbColor={COLORS.beige}
-                  />
-                </View>
-              ))
-            ) : (
-              <View style={styles.visibilityRow}>
-                <Text style={styles.visibilityEmptyText}>No annotations yet</Text>
-              </View>
-            )}
-          </View>
-        )}
       </View>
 
       {/* Enable/Disable Toggle */}
@@ -365,16 +299,17 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 44,
     left: 0,
-    backgroundColor: COLORS.beige,
-    borderRadius: 8,
-    paddingVertical: 8,
+    backgroundColor: '#FFFDF8',
+    borderRadius: 14,
+    paddingVertical: 6,
     minWidth: 200,
     zIndex: 30000,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
     elevation: 30000,
+    overflow: 'hidden',
   },
   visibilityRow: {
     flexDirection: 'row',

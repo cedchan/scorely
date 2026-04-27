@@ -10,7 +10,7 @@
 
 set -euo pipefail
 
-DOCKER_BIN="${DOCKER_BIN:-/Applications/Docker.app/Contents/Resources/bin/docker}"
+DOCKER_BIN="${DOCKER_BIN:-$(which docker)}"
 ENABLE_TUNNELS="${ENABLE_TUNNELS:-0}"
 EXPO_PID=""
 API_TUNNEL_PID=""
@@ -140,10 +140,16 @@ start_localtunnel() {
 echo "🎵 Starting Scorely..."
 echo ""
 
-if ! PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH" "${DOCKER_BIN}" info > /dev/null 2>&1; then
-    echo "❌ Docker is not running. Please start Docker Desktop first."
+echo "⏳ Checking Docker status..."
+if ! timeout 10 "${DOCKER_BIN}" ps > /dev/null 2>&1; then
+    echo "❌ Docker is not responding. Please:"
+    echo "   1. Quit Docker Desktop completely"
+    echo "   2. Restart Docker Desktop"
+    echo "   3. Wait for Docker to be fully ready (whale icon stops animating)"
+    echo "   4. Try running this script again"
     exit 1
 fi
+echo "✅ Docker is ready!"
 
 # Setup SSL certificates and get local IP
 LOCAL_IP="$(setup_certificates)"
@@ -163,7 +169,7 @@ echo "✅ Expo is ready!"
 echo ""
 
 echo "📦 Starting Docker services (API + Audiveris + Nginx)..."
-PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH" "${DOCKER_BIN}" compose up --build -d
+"${DOCKER_BIN}" compose up --build -d
 
 echo "⏳ Waiting for backend services..."
 wait_for_http "https://localhost:8443/" "API (HTTPS)" 60
@@ -221,7 +227,7 @@ fi
 echo ""
 echo "Press Ctrl+C to stop Expo and any localtunnel processes."
 echo "Docker containers will keep running until you stop them with:"
-echo "PATH=\"/Applications/Docker.app/Contents/Resources/bin:\$PATH\" \"${DOCKER_BIN}\" compose down"
+echo "docker compose down"
 echo ""
 
 wait "${EXPO_PID}"

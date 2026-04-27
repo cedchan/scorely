@@ -24,6 +24,8 @@ import {
   faGrip,
   faMagnifyingGlass,
   faMusic,
+  faPen,
+  faTrash,
   faUpload,
   faUserPlus,
 } from '@fortawesome/free-solid-svg-icons';
@@ -152,13 +154,17 @@ const ScorePreview = ({ project, apiBaseUrl }) => {
   );
 };
 
-const ScoreCard = ({ project, width, onPress, apiBaseUrl }) => {
+const ScoreCard = ({ project, width, onPress, onMorePress, apiBaseUrl }) => {
   return (
     <Pressable onPress={() => onPress(project)} style={[styles.projectCard, { width }]}>
       <View style={styles.projectCardTop}>
-        <View style={styles.overflowIconWrap}>
+        <Pressable
+          style={styles.overflowIconWrap}
+          onPress={(e) => { e.stopPropagation(); onMorePress && onMorePress(project); }}
+          hitSlop={8}
+        >
           <FontAwesomeIcon icon={faEllipsisVertical} size={14} color={COLORS.muted} />
-        </View>
+        </Pressable>
         <View style={styles.metaBadge}>
           <Text style={styles.metaBadgeText}>{project.updatedAt}</Text>
         </View>
@@ -206,6 +212,12 @@ export default function UploadScreen({ navigation }) {
   const [isJoinModalVisible, setIsJoinModalVisible] = useState(false);
   const [shareCodeInput, setShareCodeInput] = useState('');
   const [isJoiningSharedScore, setIsJoiningSharedScore] = useState(false);
+  const [actionMenuProject, setActionMenuProject] = useState(null);
+  const [isDeleteModalVisible, setIsDeleteModalVisible] = useState(false);
+  const [isRenameModalVisible, setIsRenameModalVisible] = useState(false);
+  const [renameInput, setRenameInput] = useState('');
+  const [isDeletingScore, setIsDeletingScore] = useState(false);
+  const [isRenamingScore, setIsRenamingScore] = useState(false);
   const pollTimerRef = useRef(null);
 
   const [fontsLoaded] = useFonts({
@@ -220,11 +232,12 @@ export default function UploadScreen({ navigation }) {
   }, []);
 
   useEffect(() => {
+    if (!userId) return;
     let isActive = true;
 
     const loadSeededProjects = async () => {
       try {
-        const response = await fetch(`${apiBaseUrl}/api/library/recent-scores`);
+        const response = await fetch(`${apiBaseUrl}/api/library/recent-scores?user_id=${encodeURIComponent(userId)}`);
         const data = await response.json();
 
         if (!response.ok) {
@@ -270,7 +283,7 @@ export default function UploadScreen({ navigation }) {
     return () => {
       isActive = false;
     };
-  }, [apiBaseUrl]);
+  }, [apiBaseUrl, userId]);
 
   useEffect(() => {
     return () => {
@@ -378,6 +391,87 @@ export default function UploadScreen({ navigation }) {
       Alert.alert('Connection Error', `Failed to resolve share code: ${error.message}`);
     } finally {
       setIsJoiningSharedScore(false);
+    }
+  };
+
+  const openMoreMenu = (project) => {
+    setActionMenuProject(project);
+  };
+
+  const closeMoreMenu = () => {
+    setActionMenuProject(null);
+  };
+
+  const openDeleteModal = () => {
+    setIsDeleteModalVisible(true);
+  };
+
+  const closeDeleteModal = () => {
+    if (isDeletingScore) return;
+    setIsDeleteModalVisible(false);
+    setActionMenuProject(null);
+  };
+
+  const openRenameModal = () => {
+    setRenameInput(actionMenuProject?.title || '');
+    setIsRenameModalVisible(true);
+  };
+
+  const closeRenameModal = () => {
+    if (isRenamingScore) return;
+    setIsRenameModalVisible(false);
+    setActionMenuProject(null);
+  };
+
+  const confirmDelete = async () => {
+    if (!actionMenuProject?.jobId) return;
+    setIsDeletingScore(true);
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/score/${actionMenuProject.jobId}`, {
+        method: 'DELETE',
+      });
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.detail || 'Failed to delete score.');
+      }
+      setSeededProjects((prev) => prev.filter((p) => p.jobId !== actionMenuProject.jobId));
+      if (latestProject?.jobId === actionMenuProject.jobId) {
+        setLatestProject(null);
+      }
+      setIsDeleteModalVisible(false);
+      setActionMenuProject(null);
+    } catch (error) {
+      Alert.alert('Delete Error', error.message);
+    } finally {
+      setIsDeletingScore(false);
+    }
+  };
+
+  const confirmRename = async () => {
+    const newTitle = renameInput.trim();
+    if (!newTitle || !actionMenuProject?.jobId) return;
+    setIsRenamingScore(true);
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/score/${actionMenuProject.jobId}/title`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: newTitle }),
+      });
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.detail || 'Failed to rename score.');
+      }
+      const updater = (p) => p.jobId === actionMenuProject.jobId ? { ...p, title: newTitle } : p;
+      setSeededProjects((prev) => prev.map(updater));
+      if (latestProject?.jobId === actionMenuProject.jobId) {
+        setLatestProject((prev) => prev ? { ...prev, title: newTitle } : prev);
+      }
+      setIsRenameModalVisible(false);
+      setActionMenuProject(null);
+    } catch (error) {
+      Alert.alert('Rename Error', error.message);
+    } finally {
+      setIsRenamingScore(false);
     }
   };
 
@@ -678,6 +772,7 @@ export default function UploadScreen({ navigation }) {
                         project={project}
                         width={cardWidth}
                         onPress={openProject}
+                        onMorePress={project.kind === 'score' && project.action === 'open' ? openMoreMenu : undefined}
                         apiBaseUrl={apiBaseUrl}
                       />
                     ))}
@@ -704,13 +799,19 @@ export default function UploadScreen({ navigation }) {
 
                         <View style={styles.listMeta}>
                           <Text style={styles.listMetaText}>{project.updatedAt}</Text>
-                          <View style={styles.listOverflowIconWrap}>
-                            <FontAwesomeIcon
-                              icon={faEllipsisVertical}
-                              size={14}
-                              color={COLORS.muted}
-                            />
-                          </View>
+                          {project.kind === 'score' && project.action === 'open' ? (
+                            <Pressable
+                              style={styles.listOverflowIconWrap}
+                              onPress={(e) => { e.stopPropagation(); openMoreMenu(project); }}
+                              hitSlop={8}
+                            >
+                              <FontAwesomeIcon icon={faEllipsisVertical} size={14} color={COLORS.muted} />
+                            </Pressable>
+                          ) : (
+                            <View style={styles.listOverflowIconWrap}>
+                              <FontAwesomeIcon icon={faEllipsisVertical} size={14} color={COLORS.muted} />
+                            </View>
+                          )}
                         </View>
                       </Pressable>
                     ))}
@@ -721,6 +822,145 @@ export default function UploadScreen({ navigation }) {
           </View>
         </View>
       </ScrollView>
+
+      {/* Action menu modal (rename / delete) */}
+      <Modal
+        animationType="fade"
+        transparent
+        visible={!!actionMenuProject && !isDeleteModalVisible && !isRenameModalVisible}
+        onRequestClose={closeMoreMenu}
+      >
+        <View style={styles.modalOverlay}>
+          <Pressable style={styles.modalBackdrop} onPress={closeMoreMenu} />
+          <View style={[styles.modalCard, styles.actionMenuCard]}>
+            <Text style={styles.actionMenuTitle} numberOfLines={2}>
+              {actionMenuProject?.title}
+            </Text>
+            <Pressable
+              style={styles.actionMenuItem}
+              onPress={() => { openRenameModal(); }}
+            >
+              <View style={styles.actionMenuIconWrap}>
+                <FontAwesomeIcon icon={faPen} size={15} color={COLORS.primary} />
+              </View>
+              <Text style={styles.actionMenuItemText}>Rename</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.actionMenuItem, styles.actionMenuItemDestructive]}
+              onPress={() => { openDeleteModal(); }}
+            >
+              <View style={[styles.actionMenuIconWrap, styles.actionMenuIconDestructive]}>
+                <FontAwesomeIcon icon={faTrash} size={15} color='#C0392B' />
+              </View>
+              <Text style={styles.actionMenuItemTextDestructive}>Delete</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Delete confirmation modal */}
+      <Modal
+        animationType="fade"
+        transparent
+        visible={isDeleteModalVisible}
+        onRequestClose={closeDeleteModal}
+      >
+        <View style={styles.modalOverlay}>
+          <Pressable style={styles.modalBackdrop} onPress={closeDeleteModal} />
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <View style={[styles.modalIconWrap, styles.modalIconDestructive]}>
+                <FontAwesomeIcon icon={faTrash} size={18} color='#C0392B' />
+              </View>
+              <Text style={styles.modalTitle}>Delete score</Text>
+              <Text style={styles.modalSubtitle}>
+                Are you sure you want to delete "{actionMenuProject?.title}"? This cannot be undone.
+              </Text>
+            </View>
+            <View style={styles.modalActions}>
+              <Pressable
+                style={[styles.modalSecondaryButton, isDeletingScore && styles.buttonDisabled]}
+                onPress={closeDeleteModal}
+                disabled={isDeletingScore}
+              >
+                <Text style={styles.modalSecondaryButtonText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.modalDestructiveButton, isDeletingScore && styles.buttonDisabled]}
+                onPress={confirmDelete}
+                disabled={isDeletingScore}
+              >
+                {isDeletingScore ? (
+                  <ActivityIndicator size="small" color={COLORS.card} />
+                ) : (
+                  <Text style={styles.modalPrimaryButtonText}>Delete</Text>
+                )}
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Rename modal */}
+      <Modal
+        animationType="fade"
+        transparent
+        visible={isRenameModalVisible}
+        onRequestClose={closeRenameModal}
+      >
+        <View style={styles.modalOverlay}>
+          <Pressable style={styles.modalBackdrop} onPress={closeRenameModal} />
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <View style={styles.modalIconWrap}>
+                <FontAwesomeIcon icon={faPen} size={18} color={COLORS.primary} />
+              </View>
+              <Text style={styles.modalTitle}>Rename score</Text>
+              <Text style={styles.modalSubtitle}>
+                Enter a new name for this score.
+              </Text>
+            </View>
+            <View style={styles.modalInputWrap}>
+              <Text style={styles.modalInputLabel}>Title</Text>
+              <TextInput
+                value={renameInput}
+                onChangeText={setRenameInput}
+                placeholder="Score title"
+                placeholderTextColor={COLORS.muted}
+                autoCorrect={false}
+                autoFocus
+                editable={!isRenamingScore}
+                returnKeyType="done"
+                onSubmitEditing={() => { if (renameInput.trim()) confirmRename(); }}
+                style={styles.modalInputNormal}
+              />
+            </View>
+            <View style={styles.modalActions}>
+              <Pressable
+                style={[styles.modalSecondaryButton, isRenamingScore && styles.buttonDisabled]}
+                onPress={closeRenameModal}
+                disabled={isRenamingScore}
+              >
+                <Text style={styles.modalSecondaryButtonText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={[
+                  styles.modalPrimaryButton,
+                  (!renameInput.trim() || isRenamingScore) && styles.buttonDisabled,
+                ]}
+                onPress={confirmRename}
+                disabled={!renameInput.trim() || isRenamingScore}
+              >
+                {isRenamingScore ? (
+                  <ActivityIndicator size="small" color={COLORS.card} />
+                ) : (
+                  <Text style={styles.modalPrimaryButtonText}>Rename</Text>
+                )}
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       <Modal
         animationType="fade"
@@ -1038,6 +1278,85 @@ const styles = StyleSheet.create({
 
   buttonDisabled: {
     opacity: 0.55,
+  },
+
+  actionMenuCard: {
+    padding: 8,
+    maxWidth: 280,
+  },
+
+  actionMenuTitle: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 15,
+    color: COLORS.muted,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    paddingBottom: 6,
+  },
+
+  actionMenuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    borderRadius: 14,
+  },
+
+  actionMenuItemDestructive: {
+    marginTop: 2,
+  },
+
+  actionMenuIconWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    backgroundColor: COLORS.accentSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  actionMenuIconDestructive: {
+    backgroundColor: '#FDF0EF',
+  },
+
+  actionMenuItemText: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 17,
+    color: COLORS.primary,
+  },
+
+  actionMenuItemTextDestructive: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 17,
+    color: '#C0392B',
+  },
+
+  modalIconDestructive: {
+    backgroundColor: '#FDF0EF',
+  },
+
+  modalDestructiveButton: {
+    backgroundColor: '#C0392B',
+    borderRadius: 18,
+    paddingHorizontal: 18,
+    paddingVertical: 13,
+    minWidth: 128,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  modalInputNormal: {
+    backgroundColor: COLORS.background,
+    borderWidth: 1,
+    borderColor: COLORS.stroke,
+    borderRadius: 18,
+    paddingHorizontal: 16,
+    paddingVertical: Platform.OS === 'web' ? 13 : 12,
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 18,
+    color: COLORS.primary,
+    ...(Platform.OS === 'web' ? { outlineStyle: 'none' } : {}),
   },
 
   brand: {

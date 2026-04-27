@@ -368,13 +368,15 @@ def extract_alignment(score_path: Path) -> Dict:
         return {"tempo": 120.0, "mappings": [], "version": ALIGNMENT_VERSION}
 
 
-def build_seed_job_id(seed_file: Path) -> str:
-    """Create a stable job id for a bundled library score."""
+def build_seed_job_id(seed_file: Path, user_id: Optional[str] = None) -> str:
+    """Create a stable job id for a bundled library score, optionally scoped to a user."""
     slug = re.sub(r"[^a-z0-9]+", "-", seed_file.stem.lower()).strip("-")
     if not slug:
         slug = "score"
-    digest = hashlib.sha1(seed_file.name.encode("utf-8")).hexdigest()[:8]
-    return f"seed-{slug[:40]}-{digest}"
+    key = seed_file.name if not user_id else f"{seed_file.name}:{user_id}"
+    digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:8]
+    prefix = "useed" if user_id else "seed"
+    return f"{prefix}-{slug[:40]}-{digest}"
 
 
 def list_seed_library_files(limit: int = 2) -> List[Path]:
@@ -397,10 +399,40 @@ def get_seed_bundled_audio_paths(seed_file: Path) -> Dict[str, Path]:
 
 
 def register_seed_library_score(
-    seed_file: Path, background_tasks: Optional[BackgroundTasks] = None
+    seed_file: Path,
+    background_tasks: Optional[BackgroundTasks] = None,
+    user_id: Optional[str] = None,
 ) -> LibraryScoreInfo:
-    """Mirror a bundled library score into the job cache and in-memory registry."""
-    job_id = build_seed_job_id(seed_file)
+    """Mirror a bundled library score into the job cache and in-memory registry.
+
+    When user_id is provided, creates a per-user copy so that annotations,
+    title edits, and other mutations are isolated to that user.  Page images
+    are shared with the canonical (no-user) seed job to avoid redundant renders.
+    """
+    # Always ensure the canonical seed job exists and pages are rendered.
+    canonical_job_id = build_seed_job_id(seed_file)
+    canonical_dir = get_job_dir(canonical_job_id)
+    canonical_mxl = canonical_dir / f"{canonical_job_id}.mxl"
+    canonical_manifest = canonical_dir / "manifest.json"
+
+    if not canonical_mxl.exists() or seed_file.stat().st_mtime > canonical_mxl.stat().st_mtime:
+        shutil.copy2(seed_file, canonical_mxl)
+
+    # Register canonical job in memory so its /api/download/* paths resolve.
+    if canonical_job_id not in jobs:
+        jobs[canonical_job_id] = {
+            "status": "completed",
+            "progress": {"transcription": "completed", "audio_conversion": "not_started"},
+            "files": {
+                "musicxml": f"/api/download/{canonical_job_id}/{canonical_job_id}.mxl",
+                "score_pages": f"/api/score-pages/{canonical_job_id}" if canonical_manifest.exists() else None,
+                "parts": [],
+            },
+            "original_filename": seed_file.stem,
+        }
+
+    # Determine which job id to actually return to the caller.
+    job_id = build_seed_job_id(seed_file, user_id) if user_id else canonical_job_id
     job_dir = get_job_dir(job_id)
     mxl_path = job_dir / f"{job_id}.mxl"
     existing_job = jobs.get(job_id, {})
@@ -423,6 +455,16 @@ def register_seed_library_score(
         not midi_path.exists() or bundled_full_midi.stat().st_mtime > midi_path.stat().st_mtime
     ):
         shutil.copy2(bundled_full_midi, midi_path)
+
+    # For per-user jobs, build a manifest that keeps image paths pointing at the
+    # canonical seed job's files (which are static and shared).  We never call
+    # render_score_pages on a per-user job — that would rewrite paths to the
+    # per-user dir where no SVG files exist.
+    if user_id and not manifest_path.exists() and canonical_manifest.exists():
+        canonical_data = json.loads(canonical_manifest.read_text())
+        user_manifest = dict(canonical_data)
+        user_manifest["job_id"] = job_id
+        manifest_path.write_text(json.dumps(user_manifest, indent=2))
 
     audio_completed = audio_path.exists()
     audio_status = existing_job.get("progress", {}).get("audio_conversion", "not_started")
@@ -1151,16 +1193,29 @@ async def root():
 
 
 @app.get("/api/library/recent-scores", response_model=LibraryScoresResponse)
-async def get_recent_library_scores(background_tasks: BackgroundTasks):
+async def get_recent_library_scores(background_tasks: BackgroundTasks, user_id: Optional[str] = None):
     scores = []
     for seed_file in list_seed_library_files(limit=2):
-        score_info = register_seed_library_score(seed_file, background_tasks)
-        job_dir = get_job_dir(score_info.job_id)
-        manifest_path = job_dir / "manifest.json"
-        mxl_path = job_dir / f"{score_info.job_id}.mxl"
+        # First ensure the canonical seed job has rendered pages (shared by all users).
+        canonical_job_id = build_seed_job_id(seed_file)
+        canonical_dir = get_job_dir(canonical_job_id)
+        canonical_manifest = canonical_dir / "manifest.json"
+        canonical_mxl = canonical_dir / f"{canonical_job_id}.mxl"
+        if not canonical_mxl.exists():
+            shutil.copy2(seed_file, canonical_mxl)
+        if not canonical_manifest.exists():
+            render_score_pages(canonical_job_id, canonical_mxl)
 
-        if not manifest_path.exists():
-            render_score_pages(score_info.job_id, mxl_path)
+        score_info = register_seed_library_score(seed_file, background_tasks, user_id=user_id)
+        # Per-user jobs borrow image paths from the canonical manifest — never
+        # call render_score_pages on them (it would rewrite paths to the per-user
+        # dir where no SVG files live).  Only render for the canonical job.
+        if not user_id:
+            job_dir = get_job_dir(score_info.job_id)
+            manifest_path = job_dir / "manifest.json"
+            mxl_path = job_dir / f"{score_info.job_id}.mxl"
+            if not manifest_path.exists():
+                render_score_pages(score_info.job_id, mxl_path)
 
         scores.append(score_info)
 
@@ -1408,6 +1463,21 @@ async def update_score_title(job_id: str, request: UpdateTitleRequest):
     )
 
     return {"job_id": job_id, "title": request.title}
+
+
+@app.delete("/api/score/{job_id}")
+async def delete_score(job_id: str):
+    """Delete a score and all its associated files."""
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job_dir = get_job_dir(job_id)
+    if job_dir.exists():
+        shutil.rmtree(job_dir)
+
+    del jobs[job_id]
+
+    return {"job_id": job_id, "deleted": True}
 
 
 @app.get("/api/download/{job_id}/{filename}")

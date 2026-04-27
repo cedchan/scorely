@@ -7,6 +7,7 @@ import {
   SafeAreaView,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TouchableOpacity,
   useWindowDimensions,
@@ -18,6 +19,7 @@ import { FontAwesomeIcon } from '@fortawesome/react-native-fontawesome';
 import {
   faArrowLeft,
   faChevronDown,
+  faChevronUp,
   faCopy,
   faEdit,
   faMusic,
@@ -87,6 +89,22 @@ export default function PlayerScreen({ route, navigation }) {
   const [selectedPresenceUser, setSelectedPresenceUser] = useState(null);
   const [hiddenAnnotationUsers, setHiddenAnnotationUsers] = useState(new Set());
   const [showUserVisibilityDropdown, setShowUserVisibilityDropdown] = useState(false);
+  const [backwardMenuLayout, setBackwardMenuLayout] = useState(null);
+  const [forwardMenuLayout, setForwardMenuLayout] = useState(null);
+  const [usersMenuLayout, setUsersMenuLayout] = useState(null);
+  const toolbarWrapperRef = useRef(null);
+  const backwardButtonRef = useRef(null);
+  const forwardButtonRef = useRef(null);
+  const usersButtonRef = useRef(null);
+
+  const measureButtonX = (buttonRef, setter) => {
+    if (!buttonRef.current || !toolbarWrapperRef.current) return;
+    buttonRef.current.measureLayout(
+      toolbarWrapperRef.current,
+      (x) => setter({ x }),
+      () => {}
+    );
+  };
 
   const videoRef = useRef(null);
   const streamRef = useRef(null);
@@ -99,6 +117,8 @@ export default function PlayerScreen({ route, navigation }) {
   const turnPhaseRef = useRef('idle');
   const mouthPhaseRef = useRef('idle');
   const lastTurnTimeRef = useRef(0);
+  const forwardMotionRef = useRef('manual');
+  const backwardMotionRef = useRef('manual');
   const baselineRelativeYRef = useRef(null);
   const currentPageRef = useRef(0);
   const [debugInfo, setDebugInfo] = useState('');
@@ -745,7 +765,7 @@ export default function PlayerScreen({ route, navigation }) {
       cancelled = true;
       stopCamera();
     };
-  }, [gestureDetectionEnabled, forwardMotion, backwardMotion]);
+  }, [gestureDetectionEnabled]);
   useEffect(() => {
     let objectUrl = null;
 
@@ -874,9 +894,9 @@ export default function PlayerScreen({ route, navigation }) {
     // Handle nod gesture
     if (now - lastTurnTimeRef.current >= cooldownMs && isCentered && nodDetected) {
       lastTurnTimeRef.current = now;
-      if (forwardMotion === 'nod' && currentPageRef.current < pages.length - 1) {
+      if (forwardMotionRef.current === 'nod' && currentPageRef.current < pages.length - 1) {
         goToPage(currentPageRef.current + 1);
-      } else if (backwardMotion === 'nod' && currentPageRef.current > 0) {
+      } else if (backwardMotionRef.current === 'nod' && currentPageRef.current > 0) {
         goToPage(currentPageRef.current - 1);
       }
     }
@@ -912,27 +932,27 @@ export default function PlayerScreen({ route, navigation }) {
       tiltPhaseRef.current = 'active';
       lastTurnTimeRef.current = now;
   
-      if (forwardMotion === 'tilt_right' && currentPageRef.current < pages.length - 1) {
+      if (forwardMotionRef.current === 'tilt_right' && currentPageRef.current < pages.length - 1) {
         goToPage(currentPageRef.current + 1);
         return;
       }
-  
-      if (backwardMotion === 'tilt_right' && currentPageRef.current > 0) {
+
+      if (backwardMotionRef.current === 'tilt_right' && currentPageRef.current > 0) {
         goToPage(currentPageRef.current - 1);
         return;
       }
     }
-  
+
     if (tiltDelta < -TILT_THRESHOLD) {
       tiltPhaseRef.current = 'active';
       lastTurnTimeRef.current = now;
-  
-      if (forwardMotion === 'tilt_left' && currentPageRef.current < pages.length - 1) {
+
+      if (forwardMotionRef.current === 'tilt_left' && currentPageRef.current < pages.length - 1) {
         goToPage(currentPageRef.current + 1);
         return;
       }
-  
-      if (backwardMotion === 'tilt_left' && currentPageRef.current > 0) {
+
+      if (backwardMotionRef.current === 'tilt_left' && currentPageRef.current > 0) {
         goToPage(currentPageRef.current - 1);
         return;
       }
@@ -963,27 +983,27 @@ export default function PlayerScreen({ route, navigation }) {
       turnPhaseRef.current = 'active';
       lastTurnTimeRef.current = now;
   
-      if (forwardMotion === 'turn_left' && currentPageRef.current < pages.length - 1) {
+      if (forwardMotionRef.current === 'turn_left' && currentPageRef.current < pages.length - 1) {
         goToPage(currentPageRef.current + 1);
         return;
       }
-  
-      if (backwardMotion === 'turn_left' && currentPageRef.current > 0) {
+
+      if (backwardMotionRef.current === 'turn_left' && currentPageRef.current > 0) {
         goToPage(currentPageRef.current - 1);
         return;
       }
     }
-  
+
     if (turnDelta < -TURN_THRESHOLD) {
       turnPhaseRef.current = 'active';
       lastTurnTimeRef.current = now;
-  
-      if (forwardMotion === 'turn_right' && currentPageRef.current < pages.length - 1) {
+
+      if (forwardMotionRef.current === 'turn_right' && currentPageRef.current < pages.length - 1) {
         goToPage(currentPageRef.current + 1);
         return;
       }
-  
-      if (backwardMotion === 'turn_right' && currentPageRef.current > 0) {
+
+      if (backwardMotionRef.current === 'turn_right' && currentPageRef.current > 0) {
         goToPage(currentPageRef.current - 1);
         return;
       }
@@ -1013,12 +1033,12 @@ export default function PlayerScreen({ route, navigation }) {
       mouthPhaseRef.current = 'active';
       lastTurnTimeRef.current = now;
   
-      if (forwardMotion === 'open_mouth' && currentPageRef.current < pages.length - 1) {
+      if (forwardMotionRef.current === 'open_mouth' && currentPageRef.current < pages.length - 1) {
         goToPage(currentPageRef.current + 1);
         return;
       }
-  
-      if (backwardMotion === 'open_mouth' && currentPageRef.current > 0) {
+
+      if (backwardMotionRef.current === 'open_mouth' && currentPageRef.current > 0) {
         goToPage(currentPageRef.current - 1);
         return;
       }
@@ -1062,13 +1082,8 @@ export default function PlayerScreen({ route, navigation }) {
     const exactMeasureRegion =
       nextMeasureIndex !== null ? measureRegionLookup.get(Number(nextMeasureIndex)) : null;
 
-    const autoEnabled = forwardMotion === 'auto';
-
-    if (
-      autoEnabled &&
-      exactMeasureRegion &&
-      exactMeasureRegion.pageIndex !== currentPageRef.current
-    ) {
+    // Auto-follow: flip to the page containing the current measure while playing
+    if (exactMeasureRegion && exactMeasureRegion.pageIndex !== currentPageRef.current) {
       goToPage(exactMeasureRegion.pageIndex);
       return;
     }
@@ -1080,7 +1095,7 @@ export default function PlayerScreen({ route, navigation }) {
         nextMeasure <= range.endMeasure
     );
 
-    if (autoEnabled && nextPageIndex !== -1 && nextPageIndex !== currentPageRef.current) {
+    if (nextPageIndex !== -1 && nextPageIndex !== currentPageRef.current) {
       goToPage(nextPageIndex);
     }
   };
@@ -1223,8 +1238,15 @@ export default function PlayerScreen({ route, navigation }) {
         return [...prev, annotation];
       });
     } else {
+      // Final update — upsert so fast strokes that skipped temp still get saved
       annotationSyncService.updateAnnotation(annotation);
-      setAnnotations((prev) => prev.map((a) => (a.id === annotation.id ? annotation : a)));
+      setAnnotations((prev) => {
+        const exists = prev.some((a) => a.id === annotation.id);
+        if (exists) {
+          return prev.map((a) => (a.id === annotation.id ? annotation : a));
+        }
+        return [...prev, annotation];
+      });
     }
   };
 
@@ -1329,48 +1351,45 @@ export default function PlayerScreen({ route, navigation }) {
   };
 
   const selectBackwardMotion = (motion) => {
-    if (motion !== 'manual' && motion === forwardMotion) {
-      return;
-    }
-  
+    if (motion !== 'manual' && motion === forwardMotion) return;
     tiltPhaseRef.current = 'idle';
     turnPhaseRef.current = 'idle';
     nodPhaseRef.current = 'idle';
     mouthPhaseRef.current = 'idle';
     lastTurnTimeRef.current = 0;
-  
+    backwardMotionRef.current = motion;
     setBackwardMotion(motion);
     setShowBackwardMenu(false);
   };
 
   const selectForwardMotion = (motion) => {
-    if (motion !== 'manual' && motion === backwardMotion) {
-      return;
-    }
-  
+    if (motion !== 'manual' && motion === backwardMotion) return;
     tiltPhaseRef.current = 'idle';
     turnPhaseRef.current = 'idle';
     nodPhaseRef.current = 'idle';
     mouthPhaseRef.current = 'idle';
     lastTurnTimeRef.current = 0;
-  
+    forwardMotionRef.current = motion;
     setForwardMotion(motion);
     setShowForwardMenu(false);
   };
 
-  const renderMotionOption = (currentValue, value, label, onSelect, isLast = false) => (
+  const renderMotionOption = (currentValue, value, label, onSelect, isLast = false, disabledByOther = false) => (
     <TouchableOpacity
       style={[
         styles.motionDropdownItem,
         currentValue === value && styles.motionDropdownItemActive,
         !isLast && styles.motionDropdownItemBorder,
+        disabledByOther && styles.motionDropdownItemDisabled,
       ]}
-      onPress={() => onSelect(value)}
+      onPress={() => !disabledByOther && onSelect(value)}
+      disabled={disabledByOther}
     >
       <Text
         style={[
           styles.motionDropdownText,
           currentValue === value && styles.motionDropdownTextActive,
+          disabledByOther && styles.motionDropdownTextDisabled,
         ]}
       >
         {label}
@@ -1532,109 +1551,185 @@ export default function PlayerScreen({ route, navigation }) {
         </View>
       </View>
 
-      <View style={styles.toolbarWrapper}>
-        <View style={styles.toolbarRow}>
-          <TouchableOpacity
-            style={[styles.compactPlayButton, !audioUrl && styles.compactPlayButtonDisabled]}
-            onPress={togglePlayback}
-            disabled={!audioUrl}
-          >
-            <FontAwesomeIcon
-              icon={isPlaying ? faPause : faPlay}
-              size={16}
-              color={COLORS.darkBrown}
-            />
-          </TouchableOpacity>
-
-          <View style={styles.motionMenuWrapper}>
+      <View ref={toolbarWrapperRef} style={styles.toolbarWrapper}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.toolbarScrollView}
+          contentContainerStyle={styles.toolbarScrollContent}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View style={styles.toolbarRow}>
             <TouchableOpacity
-              style={styles.motionButton}
-              onPress={() => {
-                setShowBackwardMenu((prev) => !prev);
-                setShowForwardMenu(false);
-                setShowUserVisibilityDropdown(false);
-              }}
+              style={[styles.compactPlayButton, !audioUrl && styles.compactPlayButtonDisabled]}
+              onPress={togglePlayback}
+              disabled={!audioUrl}
             >
               <FontAwesomeIcon
-                icon={faShare}
+                icon={isPlaying ? faPause : faPlay}
                 size={16}
                 color={COLORS.darkBrown}
-                style={{ transform: [{ scaleX: -1 }] }}
               />
-              <Text style={styles.motionButtonText}>{getMotionLabel(backwardMotion)}</Text>
-              <FontAwesomeIcon icon={faChevronDown} size={12} color={COLORS.darkBrown} />
             </TouchableOpacity>
 
-            {showBackwardMenu && (
-              <View style={styles.motionDropdown}>
-                {renderMotionOption(backwardMotion, 'manual', 'Manual', selectBackwardMotion)}
-                {renderMotionOption(backwardMotion, 'nod', 'Nod', selectBackwardMotion)}
-                {renderMotionOption(backwardMotion, 'turn_left', 'Turn Left', selectBackwardMotion)}
-                {renderMotionOption(backwardMotion, 'turn_right', 'Turn Right', selectBackwardMotion)}
-                {renderMotionOption(backwardMotion, 'tilt_left', 'Tilt Left', selectBackwardMotion)}
-                {renderMotionOption(backwardMotion, 'tilt_right', 'Tilt Right', selectBackwardMotion)}
-                {renderMotionOption(backwardMotion, 'open_mouth', 'Open Mouth', selectBackwardMotion, true)}
-              </View>
-            )}
-          </View>
-
-          <View style={styles.motionMenuWrapper}>
-            <TouchableOpacity
-              style={styles.motionButton}
-              onPress={() => {
-                setShowForwardMenu((prev) => !prev);
-                setShowBackwardMenu(false);
-                setShowUserVisibilityDropdown(false);
-              }}
+            <View
+              ref={backwardButtonRef}
+              style={styles.motionMenuWrapper}
+              onLayout={() => measureButtonX(backwardButtonRef, setBackwardMenuLayout)}
             >
-              <FontAwesomeIcon icon={faShare} size={16} color={COLORS.darkBrown} />
-              <Text style={styles.motionButtonText}>{getMotionLabel(forwardMotion)}</Text>
-              <FontAwesomeIcon icon={faChevronDown} size={12} color={COLORS.darkBrown} />
-            </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.motionButton}
+                onPress={() => {
+                  setShowBackwardMenu((prev) => !prev);
+                  setShowForwardMenu(false);
+                  setShowUserVisibilityDropdown(false);
+                }}
+              >
+                <FontAwesomeIcon
+                  icon={faShare}
+                  size={16}
+                  color={COLORS.darkBrown}
+                  style={{ transform: [{ scaleX: -1 }] }}
+                />
+                <Text style={styles.motionButtonText}>{getMotionLabel(backwardMotion)}</Text>
+                <FontAwesomeIcon
+                  icon={showBackwardMenu ? faChevronUp : faChevronDown}
+                  size={12}
+                  color={COLORS.darkBrown}
+                />
+              </TouchableOpacity>
+            </View>
 
-            {showForwardMenu && (
-              <View style={styles.motionDropdown}>
-                {renderMotionOption(forwardMotion, 'manual', 'Manual', selectForwardMotion)}
-                {renderMotionOption(forwardMotion, 'nod', 'Nod', selectForwardMotion)}
-                {renderMotionOption(forwardMotion, 'turn_left', 'Turn Left', selectForwardMotion)}
-                {renderMotionOption(forwardMotion, 'turn_right', 'Turn Right', selectForwardMotion)}
-                {renderMotionOption(forwardMotion, 'tilt_left', 'Tilt Left', selectForwardMotion)}
-                {renderMotionOption(forwardMotion, 'tilt_right', 'Tilt Right', selectForwardMotion)}
-                {renderMotionOption(forwardMotion, 'open_mouth', 'Open Mouth', selectForwardMotion, true)}
-              </View>
-            )}
-          </View>
+            <View
+              ref={forwardButtonRef}
+              style={styles.motionMenuWrapper}
+              onLayout={() => measureButtonX(forwardButtonRef, setForwardMenuLayout)}
+            >
+              <TouchableOpacity
+                style={styles.motionButton}
+                onPress={() => {
+                  setShowForwardMenu((prev) => !prev);
+                  setShowBackwardMenu(false);
+                  setShowUserVisibilityDropdown(false);
+                }}
+              >
+                <FontAwesomeIcon icon={faShare} size={16} color={COLORS.darkBrown} />
+                <Text style={styles.motionButtonText}>{getMotionLabel(forwardMotion)}</Text>
+                <FontAwesomeIcon
+                  icon={showForwardMenu ? faChevronUp : faChevronDown}
+                  size={12}
+                  color={COLORS.darkBrown}
+                />
+              </TouchableOpacity>
+            </View>
 
-          <AnnotationToolbar
-            currentTool={currentTool}
-            currentColor={currentColor}
-            currentStrokeWidth={currentStrokeWidth}
-            enabled={annotationsEnabled}
-            onToolChange={setCurrentTool}
-            onColorChange={setCurrentColor}
-            onStrokeWidthChange={setCurrentStrokeWidth}
-            onClearAll={handleClearAllAnnotations}
-            onToggleEnabled={() => setAnnotationsEnabled(!annotationsEnabled)}
-            annotations={annotations}
-            currentUserId={userId}
-            currentUsername={username}
-            presentUsers={presentUsers}
-            hiddenAnnotationUsers={hiddenAnnotationUsers}
-            showUserVisibilityDropdown={showUserVisibilityDropdown}
-            onToggleDropdown={setShowUserVisibilityDropdown}
-            onToggleUserVisibility={(toggledUserId) => {
-              setHiddenAnnotationUsers((prev) => {
-                const next = new Set(prev);
-                if (next.has(toggledUserId)) {
-                  next.delete(toggledUserId);
-                } else {
-                  next.add(toggledUserId);
+            <AnnotationToolbar
+              currentTool={currentTool}
+              currentColor={currentColor}
+              currentStrokeWidth={currentStrokeWidth}
+              enabled={annotationsEnabled}
+              onToolChange={setCurrentTool}
+              onColorChange={setCurrentColor}
+              onStrokeWidthChange={setCurrentStrokeWidth}
+              onClearAll={handleClearAllAnnotations}
+              onToggleEnabled={() => setAnnotationsEnabled(!annotationsEnabled)}
+              annotations={annotations}
+              currentUserId={userId}
+              currentUsername={username}
+              presentUsers={presentUsers}
+              hiddenAnnotationUsers={hiddenAnnotationUsers}
+              showUserVisibilityDropdown={showUserVisibilityDropdown}
+              onToggleDropdown={(val) => {
+                setShowUserVisibilityDropdown(val);
+                if (val) {
+                  setShowBackwardMenu(false);
+                  setShowForwardMenu(false);
                 }
-                return next;
-              });
-            }}
-          />
-        </View>
+              }}
+              onToggleUserVisibility={(toggledUserId) => {
+                setHiddenAnnotationUsers((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(toggledUserId)) {
+                    next.delete(toggledUserId);
+                  } else {
+                    next.add(toggledUserId);
+                  }
+                  return next;
+                });
+              }}
+              usersButtonRef={usersButtonRef}
+              onUsersButtonLayout={() => measureButtonX(usersButtonRef, setUsersMenuLayout)}
+            />
+          </View>
+        </ScrollView>
+
+        {/* Dropdown menus rendered outside ScrollView so they aren't clipped */}
+        {showBackwardMenu && backwardMenuLayout && (
+          <View style={[styles.motionDropdown, { left: backwardMenuLayout.x }]}>
+            {renderMotionOption(backwardMotion, 'manual', 'Manual', selectBackwardMotion, false, false)}
+            {renderMotionOption(backwardMotion, 'nod', 'Nod', selectBackwardMotion, false, forwardMotion === 'nod')}
+            {renderMotionOption(backwardMotion, 'turn_left', 'Turn Left', selectBackwardMotion, false, forwardMotion === 'turn_left')}
+            {renderMotionOption(backwardMotion, 'turn_right', 'Turn Right', selectBackwardMotion, false, forwardMotion === 'turn_right')}
+            {renderMotionOption(backwardMotion, 'tilt_left', 'Tilt Left', selectBackwardMotion, false, forwardMotion === 'tilt_left')}
+            {renderMotionOption(backwardMotion, 'tilt_right', 'Tilt Right', selectBackwardMotion, false, forwardMotion === 'tilt_right')}
+            {renderMotionOption(backwardMotion, 'open_mouth', 'Open Mouth', selectBackwardMotion, true, forwardMotion === 'open_mouth')}
+          </View>
+        )}
+        {showForwardMenu && forwardMenuLayout && (
+          <View style={[styles.motionDropdown, { left: forwardMenuLayout.x }]}>
+            {renderMotionOption(forwardMotion, 'manual', 'Manual', selectForwardMotion, false, false)}
+            {renderMotionOption(forwardMotion, 'nod', 'Nod', selectForwardMotion, false, backwardMotion === 'nod')}
+            {renderMotionOption(forwardMotion, 'turn_left', 'Turn Left', selectForwardMotion, false, backwardMotion === 'turn_left')}
+            {renderMotionOption(forwardMotion, 'turn_right', 'Turn Right', selectForwardMotion, false, backwardMotion === 'turn_right')}
+            {renderMotionOption(forwardMotion, 'tilt_left', 'Tilt Left', selectForwardMotion, false, backwardMotion === 'tilt_left')}
+            {renderMotionOption(forwardMotion, 'tilt_right', 'Tilt Right', selectForwardMotion, false, backwardMotion === 'tilt_right')}
+            {renderMotionOption(forwardMotion, 'open_mouth', 'Open Mouth', selectForwardMotion, true, backwardMotion === 'open_mouth')}
+          </View>
+        )}
+        {showUserVisibilityDropdown && usersMenuLayout && (() => {
+          const usersWithAnnotations = Array.from(
+            new Set(annotations.map((ann) => ann.user_id).filter(Boolean))
+          ).map((uid) => {
+            const isCurrentUser = uid === userId;
+            const user = presentUsers.find((u) => u.user_id === uid);
+            let uname = user?.username;
+            if (!uname && isCurrentUser) uname = username || 'Me';
+            else if (!uname) uname = 'Unknown User';
+            return { user_id: uid, username: uname, isCurrentUser };
+          }).sort((a, b) => {
+            if (a.isCurrentUser) return -1;
+            if (b.isCurrentUser) return 1;
+            return a.username.localeCompare(b.username);
+          });
+          return (
+            <View style={[styles.visibilityDropdown, { left: usersMenuLayout.x }]}>
+              {usersWithAnnotations.length > 0 ? (
+                usersWithAnnotations.map((user) => (
+                  <View key={user.user_id} style={styles.visibilityRow}>
+                    <Text style={styles.visibilityUsername}>
+                      {user.username}{user.isCurrentUser ? ' (Me)' : ''}
+                    </Text>
+                    <Switch
+                      value={!hiddenAnnotationUsers.has(user.user_id)}
+                      onValueChange={() => setHiddenAnnotationUsers((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(user.user_id)) next.delete(user.user_id);
+                        else next.add(user.user_id);
+                        return next;
+                      })}
+                      trackColor={{ false: COLORS.lightBrown, true: COLORS.darkBrown }}
+                      thumbColor={COLORS.beige}
+                    />
+                  </View>
+                ))
+              ) : (
+                <View style={styles.visibilityRow}>
+                  <Text style={styles.visibilityEmptyText}>No annotations yet</Text>
+                </View>
+              )}
+            </View>
+          );
+        })()}
       </View>
 
       {(audioError ||
@@ -2239,17 +2334,16 @@ const styles = StyleSheet.create({
   },
   toolbarWrapper: {
     backgroundColor: COLORS.lightBrown,
-    zIndex: 10000,
+    zIndex: 99999,
     position: 'relative',
-    elevation: 10000,
+    elevation: 99999,
+    overflow: 'visible',
   },
   toolbarScrollView: {
     backgroundColor: COLORS.lightBrown,
-    maxHeight: 84,
     overflow: 'visible',
   },
   toolbarScrollContent: {
-    paddingHorizontal: TOOLBAR_HORIZONTAL_PADDING,
     overflow: 'visible',
   },
   toolbarRow: {
@@ -2261,7 +2355,6 @@ const styles = StyleSheet.create({
     zIndex: 10000,
     overflow: 'visible',
     elevation: 10000,
-    flexWrap: 'wrap',
   },
   cameraStatusRow: {
     paddingHorizontal: 20,
@@ -2357,16 +2450,11 @@ const styles = StyleSheet.create({
   },
   motionDropdown: {
     position: 'absolute',
-    top: 54,
-    left: 0,
+    top: TOOLBAR_VERTICAL_PADDING + TOOLBAR_CONTROL_SIZE + 4,
     width: 170,
-    maxWidth: 170,
-    alignSelf: 'flex-start',
-    backgroundColor: '#FFFDF8',
-    borderRadius: 14,
-    paddingVertical: 6,
-    borderWidth: 1,
-    borderColor: '#E8DDD0',
+    backgroundColor: COLORS.beige,
+    borderRadius: 8,
+    paddingVertical: 4,
     overflow: 'hidden',
     zIndex: 99999,
     elevation: 99999,
@@ -2378,21 +2466,63 @@ const styles = StyleSheet.create({
   motionDropdownItem: {
     paddingHorizontal: 14,
     paddingVertical: 10,
-    backgroundColor: '#FFFDF8',
+    backgroundColor: COLORS.beige,
   },
   motionDropdownItemActive: {
-    backgroundColor: '#F3ECE3',
+    backgroundColor: '#EDE5DB',
   },
   motionDropdownItemBorder: {
     borderBottomWidth: 1,
-    borderBottomColor: '#F1E7DB',
+    borderBottomColor: '#E8DDD0',
   },
   motionDropdownText: {
     fontFamily: 'Afacad_400Regular',
-    fontSize: 15,
+    fontSize: TOOLBAR_TEXT_SIZE,
     color: COLORS.darkBrown,
   },
   motionDropdownTextActive: {
     color: COLORS.darkBrown,
+  },
+  motionDropdownItemDisabled: {
+    opacity: 0.35,
+  },
+  motionDropdownTextDisabled: {
+    color: COLORS.lightBrown,
+  },
+  visibilityDropdown: {
+    position: 'absolute',
+    top: TOOLBAR_VERTICAL_PADDING + TOOLBAR_CONTROL_SIZE + 4,
+    backgroundColor: COLORS.beige,
+    borderRadius: 8,
+    paddingVertical: 4,
+    minWidth: 220,
+    overflow: 'hidden',
+    zIndex: 99999,
+    elevation: 99999,
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+  },
+  visibilityRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    gap: 12,
+    backgroundColor: COLORS.beige,
+  },
+  visibilityUsername: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: TOOLBAR_TEXT_SIZE,
+    color: COLORS.darkBrown,
+    flex: 1,
+  },
+  visibilityEmptyText: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: TOOLBAR_TEXT_SIZE,
+    color: COLORS.lightBrown,
+    fontStyle: 'italic',
   },
 });
