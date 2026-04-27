@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  Modal,
   Platform,
   Pressable,
   SafeAreaView,
@@ -202,6 +203,9 @@ export default function UploadScreen({ navigation }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [username, setUsernameState] = useState('');
   const [userId, setUserId] = useState('');
+  const [isJoinModalVisible, setIsJoinModalVisible] = useState(false);
+  const [shareCodeInput, setShareCodeInput] = useState('');
+  const [isJoiningSharedScore, setIsJoiningSharedScore] = useState(false);
   const pollTimerRef = useRef(null);
 
   const [fontsLoaded] = useFonts({
@@ -328,15 +332,35 @@ export default function UploadScreen({ navigation }) {
     }
   };
 
-  const joinSharedScore = async () => {
-    const code = prompt('Enter 6-character share code:');
-    if (!code) return;
+  const openJoinSharedScoreModal = () => {
+    setShareCodeInput('');
+    setIsJoinModalVisible(true);
+  };
+
+  const closeJoinSharedScoreModal = () => {
+    if (isJoiningSharedScore) {
+      return;
+    }
+
+    setIsJoinModalVisible(false);
+    setShareCodeInput('');
+  };
+
+  const joinSharedScore = async (rawCode) => {
+    const code = rawCode.trim().toUpperCase();
+    if (code.length !== 6) {
+      return;
+    }
+
+    setIsJoiningSharedScore(true);
 
     try {
-      const response = await fetch(`${apiBaseUrl}/api/resolve-code/${code.toUpperCase()}`);
+      const response = await fetch(`${apiBaseUrl}/api/resolve-code/${code}`);
       const data = await response.json();
 
       if (response.ok) {
+        setIsJoinModalVisible(false);
+        setShareCodeInput('');
         navigation.push('Player', {
           apiBaseUrl,
           jobId: data.job_id,
@@ -352,6 +376,8 @@ export default function UploadScreen({ navigation }) {
       }
     } catch (error) {
       Alert.alert('Connection Error', `Failed to resolve share code: ${error.message}`);
+    } finally {
+      setIsJoiningSharedScore(false);
     }
   };
 
@@ -362,7 +388,7 @@ export default function UploadScreen({ navigation }) {
     }
 
     if (project.action === 'join') {
-      joinSharedScore();
+      openJoinSharedScoreModal();
       return;
     }
 
@@ -571,7 +597,7 @@ export default function UploadScreen({ navigation }) {
                 </View>
               </Pressable>
 
-              <Pressable style={styles.secondaryAction} onPress={joinSharedScore}>
+              <Pressable style={styles.secondaryAction} onPress={openJoinSharedScoreModal}>
                 <FontAwesomeIcon icon={faUserPlus} size={15} color={COLORS.primary} />
                 <Text style={styles.secondaryActionText}>Join with share code</Text>
               </Pressable>
@@ -695,6 +721,79 @@ export default function UploadScreen({ navigation }) {
           </View>
         </View>
       </ScrollView>
+
+      <Modal
+        animationType="fade"
+        transparent
+        visible={isJoinModalVisible}
+        onRequestClose={closeJoinSharedScoreModal}
+      >
+        <View style={styles.modalOverlay}>
+          <Pressable style={styles.modalBackdrop} onPress={closeJoinSharedScoreModal} />
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <View style={styles.modalIconWrap}>
+                <FontAwesomeIcon icon={faUserPlus} size={18} color={COLORS.primary} />
+              </View>
+              <Text style={styles.modalTitle}>Join shared score</Text>
+              <Text style={styles.modalSubtitle}>
+                Enter the 6-character share code to open a collaborative score.
+              </Text>
+            </View>
+
+            <View style={styles.modalInputWrap}>
+              <Text style={styles.modalInputLabel}>Share code</Text>
+              <TextInput
+                value={shareCodeInput}
+                onChangeText={(value) => {
+                  const sanitized = value.replace(/[^a-z0-9]/gi, '').toUpperCase().slice(0, 6);
+                  setShareCodeInput(sanitized);
+                }}
+                placeholder="ABC123"
+                placeholderTextColor={COLORS.muted}
+                autoCapitalize="characters"
+                autoCorrect={false}
+                maxLength={6}
+                autoFocus
+                editable={!isJoiningSharedScore}
+                returnKeyType="done"
+                onSubmitEditing={() => {
+                  if (shareCodeInput.trim().length === 6) {
+                    joinSharedScore(shareCodeInput);
+                  }
+                }}
+                style={styles.modalInput}
+              />
+            </View>
+
+            <View style={styles.modalActions}>
+              <Pressable
+                style={[styles.modalSecondaryButton, isJoiningSharedScore && styles.buttonDisabled]}
+                onPress={closeJoinSharedScoreModal}
+                disabled={isJoiningSharedScore}
+              >
+                <Text style={styles.modalSecondaryButtonText}>Cancel</Text>
+              </Pressable>
+
+              <Pressable
+                style={[
+                  styles.modalPrimaryButton,
+                  (isJoiningSharedScore || shareCodeInput.trim().length !== 6) &&
+                    styles.buttonDisabled,
+                ]}
+                onPress={() => joinSharedScore(shareCodeInput)}
+                disabled={isJoiningSharedScore || shareCodeInput.trim().length !== 6}
+              >
+                {isJoiningSharedScore ? (
+                  <ActivityIndicator size="small" color={COLORS.card} />
+                ) : (
+                  <Text style={styles.modalPrimaryButtonText}>Join score</Text>
+                )}
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -814,6 +913,131 @@ const styles = StyleSheet.create({
     fontFamily: 'Afacad_400Regular',
     fontSize: 18,
     color: COLORS.primary,
+  },
+
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(49, 31, 24, 0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+  },
+
+  modalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+
+  modalCard: {
+    width: '100%',
+    maxWidth: 440,
+    backgroundColor: COLORS.card,
+    borderRadius: 28,
+    borderWidth: 1,
+    borderColor: COLORS.stroke,
+    padding: 24,
+    shadowColor: '#2B1912',
+    shadowOpacity: 0.14,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 8,
+  },
+
+  modalHeader: {
+    marginBottom: 20,
+  },
+
+  modalIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 16,
+    backgroundColor: COLORS.accentSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 14,
+  },
+
+  modalTitle: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 28,
+    color: COLORS.primary,
+    marginBottom: 6,
+  },
+
+  modalSubtitle: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 17,
+    lineHeight: 22,
+    color: COLORS.muted,
+  },
+
+  modalInputWrap: {
+    marginBottom: 22,
+  },
+
+  modalInputLabel: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 16,
+    color: COLORS.primary,
+    marginBottom: 8,
+  },
+
+  modalInput: {
+    backgroundColor: COLORS.background,
+    borderWidth: 1,
+    borderColor: COLORS.stroke,
+    borderRadius: 18,
+    paddingHorizontal: 16,
+    paddingVertical: Platform.OS === 'web' ? 13 : 12,
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 24,
+    letterSpacing: 2,
+    color: COLORS.primary,
+    textTransform: 'uppercase',
+    ...(Platform.OS === 'web' ? { outlineStyle: 'none' } : {}),
+  },
+
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 10,
+  },
+
+  modalSecondaryButton: {
+    borderWidth: 1,
+    borderColor: COLORS.stroke,
+    backgroundColor: COLORS.background,
+    borderRadius: 18,
+    paddingHorizontal: 18,
+    paddingVertical: 13,
+    minWidth: 108,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  modalSecondaryButtonText: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 17,
+    color: COLORS.primary,
+  },
+
+  modalPrimaryButton: {
+    backgroundColor: COLORS.primary,
+    borderRadius: 18,
+    paddingHorizontal: 18,
+    paddingVertical: 13,
+    minWidth: 128,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  modalPrimaryButtonText: {
+    fontFamily: 'Afacad_400Regular',
+    fontSize: 17,
+    color: COLORS.card,
+  },
+
+  buttonDisabled: {
+    opacity: 0.55,
   },
 
   brand: {

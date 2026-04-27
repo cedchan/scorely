@@ -10,8 +10,8 @@ export const config = {
     // Show debug overlay on screen (Phase, Delta, Baseline)
     showDebug: false,
 
-    // Show live camera preview
-    showCameraPreview: true,
+    // Keep the camera feed hidden while still allowing gesture detection to run
+    showCameraPreview: false,
 
     // Movement thresholds (0-1 scale, where larger = more movement required)
     downThreshold: 0.01,  // How much you need to nod down to trigger
