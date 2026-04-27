@@ -65,24 +65,6 @@ const DEFAULT_PROJECTS = [
     kind: 'action',
     updatedAt: 'Collaborative',
   },
-  {
-    id: 'project-empty-1',
-    title: 'Untitled Score',
-    subtitle: '',
-    icon: faFileMusic,
-    action: 'placeholder',
-    kind: 'score',
-    updatedAt: 'Empty',
-  },
-  {
-    id: 'project-empty-2',
-    title: 'Untitled Score',
-    subtitle: '',
-    icon: faFileMusic,
-    action: 'placeholder',
-    kind: 'score',
-    updatedAt: 'Empty',
-  },
 ];
 
 const SCORE_TITLE_OVERRIDES = {
@@ -94,6 +76,11 @@ const SCORE_TITLE_OVERRIDES = {
 };
 
 const getDisplayTitle = (title) => SCORE_TITLE_OVERRIDES[title] || title;
+const DEFAULT_PREVIEW_ASPECT_RATIO = 0.707;
+const NON_SELECTABLE_TEXT_INPUT_PROPS = {
+  contextMenuHidden: true,
+  selectTextOnFocus: false,
+};
 
 const buildPreviewUri = (project, apiBaseUrl) => {
   if (!project?.previewImagePath) {
@@ -124,6 +111,10 @@ const hydrateProjectPreview = async (project, apiBaseUrl) => {
       ...project,
       title: getDisplayTitle(data.title || project.title),
       previewImagePath: data.pages?.[0]?.image_path || project.previewImagePath || null,
+      previewAspectRatio:
+        data.pages?.[0]?.width && data.pages?.[0]?.height
+          ? data.pages[0].width / data.pages[0].height
+          : project.previewAspectRatio || DEFAULT_PREVIEW_ASPECT_RATIO,
     };
   } catch (error) {
     console.error('Failed to load score preview:', error);
@@ -135,15 +126,18 @@ const ScorePreview = ({ project, apiBaseUrl }) => {
   const previewUri = buildPreviewUri(project, apiBaseUrl);
   const isSvgPreview = previewUri?.toLowerCase().includes('.svg');
   const shouldUseSvgRenderer = isSvgPreview && Platform.OS !== 'web';
+  const previewAspectRatio = project.previewAspectRatio || DEFAULT_PREVIEW_ASPECT_RATIO;
 
   return (
     <View style={styles.sheetPreview}>
       {previewUri ? (
-        shouldUseSvgRenderer ? (
-          <SvgUri uri={previewUri} width="100%" height="100%" style={styles.sheetPreviewSvg} />
-        ) : (
-          <Image source={{ uri: previewUri }} style={styles.sheetPreviewImage} resizeMode="cover" />
-        )
+        <View style={[styles.sheetPreviewAsset, { aspectRatio: previewAspectRatio }]}>
+          {shouldUseSvgRenderer ? (
+            <SvgUri uri={previewUri} width="100%" height="100%" style={styles.sheetPreviewSvg} />
+          ) : (
+            <Image source={{ uri: previewUri }} style={styles.sheetPreviewImage} resizeMode="cover" />
+          )}
+        </View>
       ) : (
         <View style={styles.sheetPreviewEmpty}>
           <FontAwesomeIcon icon={faFileMusic} size={18} color={COLORS.muted} />
@@ -307,6 +301,10 @@ export default function UploadScreen({ navigation }) {
                 ...prev,
                 title: getDisplayTitle(data.title || prev.title),
                 previewImagePath: data.pages?.[0]?.image_path || prev.previewImagePath || null,
+                previewAspectRatio:
+                  data.pages?.[0]?.width && data.pages?.[0]?.height
+                    ? data.pages[0].width / data.pages[0].height
+                    : prev.previewAspectRatio || DEFAULT_PREVIEW_ASPECT_RATIO,
               };
             });
           }
@@ -427,7 +425,10 @@ export default function UploadScreen({ navigation }) {
     if (!actionMenuProject?.jobId) return;
     setIsDeletingScore(true);
     try {
-      const response = await fetch(`${apiBaseUrl}/api/score/${actionMenuProject.jobId}`, {
+      const deleteUrl = userId
+        ? `${apiBaseUrl}/api/score/${actionMenuProject.jobId}?user_id=${encodeURIComponent(userId)}`
+        : `${apiBaseUrl}/api/score/${actionMenuProject.jobId}`;
+      const response = await fetch(deleteUrl, {
         method: 'DELETE',
       });
       if (!response.ok) {
@@ -617,20 +618,15 @@ export default function UploadScreen({ navigation }) {
   };
 
   const projects = useMemo(() => {
-    const placeholderProjects = DEFAULT_PROJECTS.filter((project) => project.action === 'placeholder');
-    const seededProjectSlots = seededProjects.slice(0, placeholderProjects.length);
-    const fallbackPlaceholders = placeholderProjects.slice(seededProjectSlots.length);
-
     if (!latestProject) {
-      return [DEFAULT_PROJECTS[0], DEFAULT_PROJECTS[1], ...seededProjectSlots, ...fallbackPlaceholders];
+      return [DEFAULT_PROJECTS[0], DEFAULT_PROJECTS[1], ...seededProjects];
     }
 
     return [
       DEFAULT_PROJECTS[0],
       latestProject,
       DEFAULT_PROJECTS[1],
-      ...seededProjectSlots,
-      ...fallbackPlaceholders,
+      ...seededProjects,
     ];
   }, [latestProject, seededProjects]);
 
@@ -712,6 +708,7 @@ export default function UploadScreen({ navigation }) {
                     onChangeText={setSearchQuery}
                     placeholder="Search library"
                     placeholderTextColor={COLORS.muted}
+                    {...NON_SELECTABLE_TEXT_INPUT_PROPS}
                     style={styles.searchInput}
                   />
                 </View>
@@ -932,6 +929,7 @@ export default function UploadScreen({ navigation }) {
                 editable={!isRenamingScore}
                 returnKeyType="done"
                 onSubmitEditing={() => { if (renameInput.trim()) confirmRename(); }}
+                {...NON_SELECTABLE_TEXT_INPUT_PROPS}
                 style={styles.modalInputNormal}
               />
             </View>
@@ -1002,6 +1000,7 @@ export default function UploadScreen({ navigation }) {
                     joinSharedScore(shareCodeInput);
                   }
                 }}
+                {...NON_SELECTABLE_TEXT_INPUT_PROPS}
                 style={styles.modalInput}
               />
             </View>
@@ -1554,7 +1553,11 @@ const styles = StyleSheet.create({
     marginBottom: 14,
     overflow: 'hidden',
     alignItems: 'stretch',
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
+  },
+
+  sheetPreviewAsset: {
+    width: '100%',
   },
 
   sheetPreviewSvg: {

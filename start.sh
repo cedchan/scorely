@@ -10,13 +10,53 @@
 
 set -euo pipefail
 
-DOCKER_BIN="${DOCKER_BIN:-$(which docker)}"
 ENABLE_TUNNELS="${ENABLE_TUNNELS:-0}"
 EXPO_PID=""
 API_TUNNEL_PID=""
 WEB_TUNNEL_PID=""
 API_TUNNEL_LOG=""
 WEB_TUNNEL_LOG=""
+
+resolve_docker_bin() {
+    if [[ -n "${DOCKER_BIN:-}" ]]; then
+        echo "${DOCKER_BIN}"
+        return 0
+    fi
+
+    if command -v docker >/dev/null 2>&1; then
+        command -v docker
+        return 0
+    fi
+
+    if [[ -x "/Applications/Docker.app/Contents/Resources/bin/docker" ]]; then
+        echo "/Applications/Docker.app/Contents/Resources/bin/docker"
+        return 0
+    fi
+
+    local candidate
+    for candidate in \
+        "/opt/homebrew/bin/docker" \
+        "/usr/local/bin/docker" \
+        "/usr/bin/docker"
+    do
+        if [[ -x "${candidate}" ]]; then
+            echo "${candidate}"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+DOCKER_BIN="$(resolve_docker_bin || true)"
+DOCKER_DIR=""
+if [[ -n "${DOCKER_BIN}" ]]; then
+    DOCKER_DIR="$(dirname "${DOCKER_BIN}")"
+    case ":$PATH:" in
+        *":${DOCKER_DIR}:"*) ;;
+        *) export PATH="${DOCKER_DIR}:$PATH" ;;
+    esac
+fi
 
 cleanup() {
     if [[ -n "${API_TUNNEL_PID}" ]] && kill -0 "${API_TUNNEL_PID}" 2>/dev/null; then
@@ -58,6 +98,22 @@ wait_for_http() {
     done
 }
 
+wait_for_command_success() {
+    local label="$1"
+    local max_retries="${2:-10}"
+    shift 2
+
+    local retry_count=0
+    until "$@" > /dev/null 2>&1; do
+        retry_count=$((retry_count + 1))
+        if [[ "${retry_count}" -ge "${max_retries}" ]]; then
+            echo "❌ ${label} failed to become ready."
+            return 1
+        fi
+        sleep 1
+    done
+}
+
 setup_certificates() {
     echo "🔐 Checking SSL certificates..." >&2
 
@@ -71,10 +127,11 @@ setup_certificates() {
         brew install mkcert
     fi
 
-    # Install local CA if not already done
-    if ! mkcert -CAROOT &> /dev/null; then
-        echo "📜 Installing local Certificate Authority..." >&2
-        mkcert -install
+    # Ensure the local CA is trusted. mkcert -install is safe to rerun.
+    echo "📜 Ensuring local Certificate Authority is installed..." >&2
+    if ! mkcert -install >&2; then
+        echo "⚠️  mkcert could not install the local CA automatically." >&2
+        echo "   You may need to run 'mkcert -install' manually." >&2
     fi
 
     # Get local IP address
@@ -141,7 +198,15 @@ echo "🎵 Starting Scorely..."
 echo ""
 
 echo "⏳ Checking Docker status..."
-if ! timeout 10 "${DOCKER_BIN}" ps > /dev/null 2>&1; then
+if [[ -z "${DOCKER_BIN}" ]]; then
+    echo "❌ Docker CLI not found. Install Docker Desktop and make sure it is available."
+    echo "   You can also rerun with DOCKER_BIN=/full/path/to/docker ./start.sh"
+    exit 1
+fi
+
+echo "🐳 Using Docker CLI: ${DOCKER_BIN}"
+
+if ! wait_for_command_success "Docker" 10 "${DOCKER_BIN}" ps; then
     echo "❌ Docker is not responding. Please:"
     echo "   1. Quit Docker Desktop completely"
     echo "   2. Restart Docker Desktop"
@@ -227,7 +292,7 @@ fi
 echo ""
 echo "Press Ctrl+C to stop Expo and any localtunnel processes."
 echo "Docker containers will keep running until you stop them with:"
-echo "docker compose down"
+echo "PATH=\"/Applications/Docker.app/Contents/Resources/bin:\$PATH\" \"${DOCKER_BIN}\" compose down"
 echo ""
 
 wait "${EXPO_PID}"

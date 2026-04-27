@@ -123,6 +123,7 @@ export default function PlayerScreen({ route, navigation }) {
   const currentPageRef = useRef(0);
   const [debugInfo, setDebugInfo] = useState('');
   const updateMeasureFromTimeRef = useRef(() => {});
+  const suppressPlaybackHighlightUntilRef = useRef(0);
 
   const jobId = route.params?.jobId;
   const apiBaseUrl = route.params?.apiBaseUrl || getApiBaseUrl();
@@ -407,7 +408,8 @@ export default function PlayerScreen({ route, navigation }) {
 
     const handleAnnotationAdded = ({ annotation }) => {
       setAnnotations((prev) => {
-        if (prev.some((a) => a.id === annotation.id)) {
+        const existingIndex = prev.findIndex((a) => a.id === annotation.id);
+        if (existingIndex !== -1) {
           return prev;
         }
         return [...prev, annotation];
@@ -416,26 +418,27 @@ export default function PlayerScreen({ route, navigation }) {
 
     const handleAnnotationUpdated = ({ annotation }) => {
       setAnnotations((prev) => {
-        const exists = prev.some((a) => a.id === annotation.id);
+        const existingIndex = prev.findIndex((a) => a.id === annotation.id);
         const isTemp = annotation._isTemp === true;
         const isFinal = annotation._isFinal === true;
 
-        if (exists) {
-          return prev.map((a) => {
-            if (a.id !== annotation.id) return a;
+        if (existingIndex !== -1) {
+          const next = prev.slice();
 
-            if (isFinal) {
-              const { _isTemp, _isFinal, ...finalAnnotation } = annotation;
-              return finalAnnotation;
-            }
+          if (isFinal) {
+            const { _isTemp, _isFinal, ...finalAnnotation } = annotation;
+            next[existingIndex] = finalAnnotation;
+            return next;
+          }
 
-            if (isTemp) {
-              return { ...annotation, _isTemp: true };
-            }
+          if (isTemp) {
+            next[existingIndex] = { ...annotation, _isTemp: true };
+            return next;
+          }
 
-            const { _isTemp: removedTemp, ...cleanAnnotation } = annotation;
-            return cleanAnnotation;
-          });
+          const { _isTemp: removedTemp, ...cleanAnnotation } = annotation;
+          next[existingIndex] = cleanAnnotation;
+          return next;
         }
 
         if (isFinal) {
@@ -1059,6 +1062,10 @@ export default function PlayerScreen({ route, navigation }) {
   };
 
   const updateMeasureFromTime = (timeSeconds) => {
+    if (Date.now() < suppressPlaybackHighlightUntilRef.current) {
+      return;
+    }
+
     if (!alignmentMappings.length) {
       return;
     }
@@ -1162,13 +1169,13 @@ export default function PlayerScreen({ route, navigation }) {
       return;
     }
 
+    suppressPlaybackHighlightUntilRef.current = Date.now() + 250;
+
     try {
       audioElement.currentTime = Math.max(0, targetTime);
     } catch {
       return;
     }
-
-    updateMeasureFromTime(targetTime - PLAYBACK_HIGHLIGHT_LEAD_SECONDS);
 
     if (!audioElement.paused && !audioElement.ended) {
       startPlaybackHighlightSync();
@@ -1231,21 +1238,26 @@ export default function PlayerScreen({ route, navigation }) {
     } else if (annotation._isTemp) {
       annotationSyncService.updateAnnotation(annotation);
       setAnnotations((prev) => {
-        const exists = prev.some((a) => a.id === annotation.id);
-        if (exists) {
-          return prev.map((a) => (a.id === annotation.id ? annotation : a));
+        const existingIndex = prev.findIndex((a) => a.id === annotation.id);
+        if (existingIndex !== -1) {
+          const next = prev.slice();
+          next[existingIndex] = annotation;
+          return next;
         }
         return [...prev, annotation];
       });
     } else {
       // Final update — upsert so fast strokes that skipped temp still get saved
       annotationSyncService.updateAnnotation(annotation);
+      const { _isTemp, _isFinal, ...finalAnnotation } = annotation;
       setAnnotations((prev) => {
-        const exists = prev.some((a) => a.id === annotation.id);
-        if (exists) {
-          return prev.map((a) => (a.id === annotation.id ? annotation : a));
+        const existingIndex = prev.findIndex((a) => a.id === annotation.id);
+        if (existingIndex !== -1) {
+          const next = prev.slice();
+          next[existingIndex] = finalAnnotation;
+          return next;
         }
-        return [...prev, annotation];
+        return [...prev, finalAnnotation];
       });
     }
   };
@@ -1863,33 +1875,39 @@ export default function PlayerScreen({ route, navigation }) {
                     return (
                       <>
                         <View style={styles.imageContainer}>
-                          {isSvgPage && item.svgXml ? (
-                            <SvgXml
-                              xml={injectHighlightIntoSvg(item.svgXml, activeMeasureRegion)}
-                              width={displayedWidth}
-                              height={displayedHeight}
-                              style={styles.pageSvg}
-                            />
-                          ) : isSvgPage ? (
-                            <SvgUri
-                              uri={item.uri}
-                              width={displayedWidth}
-                              height={displayedHeight}
-                              style={styles.pageSvg}
-                            />
-                          ) : (
-                            <Image
-                              source={{ uri: item.uri }}
-                              style={[
-                                styles.pageImage,
-                                {
-                                  width: displayedWidth,
-                                  height: displayedHeight,
-                                },
-                              ]}
-                              resizeMode="contain"
-                            />
-                          )}
+                          <View
+                            style={[
+                              styles.pageAssetFrame,
+                              {
+                                left: imageOffsetX,
+                                top: imageOffsetY,
+                                width: displayedWidth,
+                                height: displayedHeight,
+                              },
+                            ]}
+                          >
+                            {isSvgPage && item.svgXml ? (
+                              <SvgXml
+                                xml={injectHighlightIntoSvg(item.svgXml, activeMeasureRegion)}
+                                width="100%"
+                                height="100%"
+                                style={styles.pageSvg}
+                              />
+                            ) : isSvgPage ? (
+                              <SvgUri
+                                uri={item.uri}
+                                width="100%"
+                                height="100%"
+                                style={styles.pageSvg}
+                              />
+                            ) : (
+                              <Image
+                                source={{ uri: item.uri }}
+                                style={styles.pageImage}
+                                resizeMode="contain"
+                              />
+                            )}
+                          </View>
 
                           {!isSvgPage && activeMeasureRegion ? (
                             <View
@@ -2243,10 +2261,12 @@ const styles = StyleSheet.create({
     zIndex: 2,
   },
   pageImage: {
-    position: 'relative',
+    width: '100%',
+    height: '100%',
   },
   pageSvg: {
-    position: 'relative',
+    width: '100%',
+    height: '100%',
   },
   imageContainer: {
     justifyContent: 'center',
@@ -2255,6 +2275,9 @@ const styles = StyleSheet.create({
     width: '100%',
     flex: 1,
     overflow: 'visible',
+  },
+  pageAssetFrame: {
+    position: 'absolute',
   },
   measureHitAreaLayer: {
     ...StyleSheet.absoluteFillObject,

@@ -30,8 +30,20 @@ function pointsToPathStringStatic(points, normalizeWidth, normalizeHeight, image
     return d;
   }
 
+  if (px.length <= 4) {
+    for (let i = 1; i < px.length; i += 1) {
+      d += ` L ${px[i].x} ${px[i].y}`;
+    }
+    return d;
+  }
+
+  // Keep the first few segments exact so fast strokes don't appear to "miss"
+  // the beginning before enough points exist for smooth interpolation.
+  d += ` L ${px[1].x} ${px[1].y}`;
+  d += ` L ${px[2].x} ${px[2].y}`;
+
   // Catmull-Rom → cubic bezier
-  for (let i = 0; i < px.length - 1; i++) {
+  for (let i = 2; i < px.length - 1; i++) {
     const p0 = px[Math.max(i - 1, 0)];
     const p1 = px[i];
     const p2 = px[i + 1];
@@ -80,6 +92,8 @@ export default function AnnotationLayer({
   const lastUpdateTimeRef = useRef(0);
   const pendingUpdateRef = useRef(null);
   const eraserRadius = 20;
+  const strokeIdCounterRef = useRef(0);
+  const tempSignaturesRef = useRef(new Map());
 
   // Refs that mirror props — keep panResponder stable (no mid-stroke recreations)
   const enabledRef = useRef(enabled);
@@ -108,6 +122,53 @@ export default function AnnotationLayer({
   normalizeHeightRef.current = normalizeHeight;
   imageOffsetXRef.current = imageOffsetX;
   imageOffsetYRef.current = imageOffsetY;
+
+  const buildNormalizedPoint = (locationX, locationY) => {
+    const adjustedX = locationX - imageOffsetXRef.current;
+    const adjustedY = locationY - imageOffsetYRef.current;
+    const safeWidth = Math.max(1, normalizeWidthRef.current);
+    const safeHeight = Math.max(1, normalizeHeightRef.current);
+
+    return {
+      // Keep score-relative coordinates, but allow values outside 0-100 so
+      // annotations can extend into page whitespace around the rendered image.
+      x: (adjustedX / safeWidth) * 100,
+      y: (adjustedY / safeHeight) * 100,
+    };
+  };
+
+  const appendInterpolatedPoints = (points, nextPoint) => {
+    const lastPoint = points[points.length - 1] || null;
+    if (!lastPoint) {
+      return [nextPoint];
+    }
+
+    const safeWidth = Math.max(1, normalizeWidthRef.current);
+    const safeHeight = Math.max(1, normalizeHeightRef.current);
+    const deltaX = ((nextPoint.x - lastPoint.x) / 100) * safeWidth;
+    const deltaY = ((nextPoint.y - lastPoint.y) / 100) * safeHeight;
+    const distancePx = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+
+    // Backfill long jumps so quick stroke starts do not collapse into a
+    // single straight segment before enough move events arrive.
+    const maxStepPx = Math.max(3, currentStrokeWidthRef.current * 0.9);
+    if (distancePx <= maxStepPx) {
+      return [...points, nextPoint];
+    }
+
+    const segmentCount = Math.ceil(distancePx / maxStepPx);
+    const nextPoints = [...points];
+
+    for (let index = 1; index <= segmentCount; index += 1) {
+      const t = index / segmentCount;
+      nextPoints.push({
+        x: lastPoint.x + (nextPoint.x - lastPoint.x) * t,
+        y: lastPoint.y + (nextPoint.y - lastPoint.y) * t,
+      });
+    }
+
+    return nextPoints;
+  };
 
   const sendLiveUpdate = useRef((points) => {
     if (!onAnnotationUpdatedRef.current || !tempAnnotationIdRef.current) return;
@@ -196,6 +257,48 @@ export default function AnnotationLayer({
     });
   }).current;
 
+  const finalizeCurrentStroke = useRef(() => {
+    if (!enabledRef.current || currentToolRef.current !== 'pen' || currentPathPointsRef.current.length === 0) {
+      return;
+    }
+
+    if (updateThrottleRef.current) {
+      clearTimeout(updateThrottleRef.current);
+      updateThrottleRef.current = null;
+    }
+
+    const finalPoints = currentPathPointsRef.current.slice();
+    const frozenPathString = pointsToPathStringStatic(
+      finalPoints,
+      normalizeWidthRef.current,
+      normalizeHeightRef.current,
+      imageOffsetXRef.current,
+      imageOffsetYRef.current
+    );
+
+    onAnnotationUpdatedRef.current?.({
+      id: tempAnnotationIdRef.current,
+      job_id: '',
+      page_number: pageNumberRef.current,
+      type: 'path',
+      user_id: currentUserIdRef.current,
+      timestamp: Date.now() / 1000,
+      path: {
+        points: finalPoints,
+        color: currentColorRef.current,
+        strokeWidth: currentStrokeWidthRef.current,
+        opacity: 1.0,
+        _frozenPathString: frozenPathString,
+      },
+      _isFinal: true,
+    });
+
+    currentPathPointsRef.current = [];
+    setCurrentPathPoints([]);
+    tempAnnotationIdRef.current = null;
+    pendingUpdateRef.current = null;
+  }).current;
+
   // panResponder is created once and never recreated — all values read via refs
   const panResponder = useMemo(() => PanResponder.create({
     onStartShouldSetPanResponder: () => enabledRef.current,
@@ -206,15 +309,11 @@ export default function AnnotationLayer({
       const { locationX, locationY } = event.nativeEvent;
 
       if (currentToolRef.current === 'pen') {
-        const adjustedX = locationX - imageOffsetXRef.current;
-        const adjustedY = locationY - imageOffsetYRef.current;
-        const initialPoints = [{
-          x: (adjustedX / normalizeWidthRef.current) * 100,
-          y: (adjustedY / normalizeHeightRef.current) * 100,
-        }];
+        const initialPoints = [buildNormalizedPoint(locationX, locationY)];
         currentPathPointsRef.current = initialPoints;
         setCurrentPathPoints(initialPoints);
-        tempAnnotationIdRef.current = `temp-${Date.now()}`;
+        strokeIdCounterRef.current += 1;
+        tempAnnotationIdRef.current = `temp-${Date.now()}-${strokeIdCounterRef.current}`;
         sendLiveUpdate(initialPoints);
       } else if (currentToolRef.current === 'eraser') {
         annotationsToEraseRef.current = [];
@@ -228,15 +327,15 @@ export default function AnnotationLayer({
       const { locationX, locationY } = event.nativeEvent;
 
       if (currentToolRef.current === 'pen') {
-        const adjustedX = locationX - imageOffsetXRef.current;
-        const adjustedY = locationY - imageOffsetYRef.current;
-        const newPoints = [
-          ...currentPathPointsRef.current,
-          {
-            x: (adjustedX / normalizeWidthRef.current) * 100,
-            y: (adjustedY / normalizeHeightRef.current) * 100,
-          },
-        ];
+        const nextPoint = buildNormalizedPoint(locationX, locationY);
+        const lastPoint =
+          currentPathPointsRef.current[currentPathPointsRef.current.length - 1] || null;
+
+        if (lastPoint && lastPoint.x === nextPoint.x && lastPoint.y === nextPoint.y) {
+          return;
+        }
+
+        const newPoints = appendInterpolatedPoints(currentPathPointsRef.current, nextPoint);
         currentPathPointsRef.current = newPoints;
         setCurrentPathPoints(newPoints);
         sendThrottledLiveUpdate(newPoints);
@@ -249,41 +348,8 @@ export default function AnnotationLayer({
     onPanResponderRelease: () => {
       if (!enabledRef.current) return;
 
-      if (currentToolRef.current === 'pen' && currentPathPointsRef.current.length > 0) {
-        if (updateThrottleRef.current) {
-          clearTimeout(updateThrottleRef.current);
-          updateThrottleRef.current = null;
-        }
-
-        const finalPoints = currentPathPointsRef.current;
-        const frozenPathString = pointsToPathStringStatic(
-          finalPoints,
-          normalizeWidthRef.current,
-          normalizeHeightRef.current,
-          imageOffsetXRef.current,
-          imageOffsetYRef.current
-        );
-
-        onAnnotationUpdatedRef.current({
-          id: tempAnnotationIdRef.current,
-          job_id: '',
-          page_number: pageNumberRef.current,
-          type: 'path',
-          user_id: currentUserIdRef.current,
-          timestamp: Date.now() / 1000,
-          path: {
-            points: finalPoints,
-            color: currentColorRef.current,
-            strokeWidth: currentStrokeWidthRef.current,
-            opacity: 1.0,
-            _frozenPathString: frozenPathString,
-          },
-          _isFinal: true,
-        });
-
-        currentPathPointsRef.current = [];
-        setCurrentPathPoints([]);
-        tempAnnotationIdRef.current = null;
+      if (currentToolRef.current === 'pen') {
+        finalizeCurrentStroke();
       } else if (currentToolRef.current === 'eraser') {
         annotationsToEraseRef.current = [];
         setEraserPosition(null);
@@ -291,8 +357,12 @@ export default function AnnotationLayer({
     },
 
     onPanResponderTerminate: () => {
-      currentPathPointsRef.current = [];
-      setCurrentPathPoints([]);
+      if (currentToolRef.current === 'pen') {
+        finalizeCurrentStroke();
+      } else {
+        currentPathPointsRef.current = [];
+        setCurrentPathPoints([]);
+      }
       annotationsToEraseRef.current = [];
       setEraserPosition(null);
     },
@@ -301,6 +371,13 @@ export default function AnnotationLayer({
   // Catmull-Rom → cubic bezier, parameterized (used both inline and at freeze time)
   const pointsToPathString = (points) =>
     pointsToPathStringStatic(points, normalizeWidth, normalizeHeight, imageOffsetX, imageOffsetY);
+
+  useEffect(() => () => {
+    if (updateThrottleRef.current) {
+      clearTimeout(updateThrottleRef.current);
+    }
+    lingerTimersRef.current.forEach((timer) => clearTimeout(timer));
+  }, []);
 
   // Filter annotations for current page and visible users
   const pageAnnotations = annotations.filter((ann) => {
@@ -325,9 +402,12 @@ export default function AnnotationLayer({
 
   useEffect(() => {
     const now = Date.now();
+    const seenAnnotationIds = new Set();
 
     pageAnnotations.forEach((annotation) => {
       if (annotation.type !== 'path' || annotation.user_id === currentUserId) return;
+      seenAnnotationIds.add(annotation.id);
+      const lastPoint = annotation.path?.points?.[annotation.path.points.length - 1] || null;
 
       if (annotation._isTemp === true) {
         // Cancel any pending linger timer — stroke is still in progress
@@ -335,11 +415,25 @@ export default function AnnotationLayer({
           clearTimeout(lingerTimersRef.current.get(annotation.id));
           lingerTimersRef.current.delete(annotation.id);
         }
-        activeDrawingRef.current.set(annotation.id, now);
+        if (!lastPoint) {
+          return;
+        }
+
+        const signature = `${annotation.path.points.length}:${lastPoint.x.toFixed(3)}:${lastPoint.y.toFixed(3)}`;
+        const previousSignature = tempSignaturesRef.current.get(annotation.id);
+        const existingEntry = activeDrawingRef.current.get(annotation.id);
+
+        tempSignaturesRef.current.set(annotation.id, signature);
+        activeDrawingRef.current.set(annotation.id, {
+          userId: annotation.user_id,
+          point: lastPoint,
+          lastSeen: previousSignature !== signature || !existingEntry ? now : existingEntry.lastSeen,
+        });
       } else if (activeDrawingRef.current.has(annotation.id) && !lingerTimersRef.current.has(annotation.id)) {
         // Stroke just committed — start linger timer
         const timer = setTimeout(() => {
           activeDrawingRef.current.delete(annotation.id);
+          tempSignaturesRef.current.delete(annotation.id);
           lingerTimersRef.current.delete(annotation.id);
           forceRender((prev) => prev + 1);
         }, NAMETAG_LINGER_MS);
@@ -347,13 +441,26 @@ export default function AnnotationLayer({
       }
     });
 
+    activeDrawingRef.current.forEach((_, id) => {
+      if (!seenAnnotationIds.has(id) && !lingerTimersRef.current.has(id)) {
+        const timer = setTimeout(() => {
+          activeDrawingRef.current.delete(id);
+          tempSignaturesRef.current.delete(id);
+          lingerTimersRef.current.delete(id);
+          forceRender((prev) => prev + 1);
+        }, NAMETAG_LINGER_MS);
+        lingerTimersRef.current.set(id, timer);
+      }
+    });
+
     // Fallback: clear stale entries that never got a final update (e.g. disconnected user)
     const fallback = setTimeout(() => {
       const cutoff = Date.now();
       let changed = false;
-      activeDrawingRef.current.forEach((timestamp, id) => {
-        if (cutoff - timestamp > 1500 && !lingerTimersRef.current.has(id)) {
+      activeDrawingRef.current.forEach((entry, id) => {
+        if (cutoff - entry.lastSeen > 1500 && !lingerTimersRef.current.has(id)) {
           activeDrawingRef.current.delete(id);
+          tempSignaturesRef.current.delete(id);
           changed = true;
         }
       });
@@ -363,16 +470,29 @@ export default function AnnotationLayer({
     return () => clearTimeout(fallback);
   }, [pageAnnotations, currentUserId]);
 
-  // Find remote temp annotations - only show while actively drawing
-  const remoteTempAnnotations = pageAnnotations.filter((annotation) => {
-    if (annotation.type !== 'path' || !annotation.path) return false;
-    if (annotation.user_id === currentUserId) return false;
+  // Show at most one live name tag per remote user, pinned to their latest active stroke.
+  const remoteTempAnnotations = pageAnnotations.reduce((acc, annotation) => {
+    if (annotation.type !== 'path' || !annotation.path) return acc;
+    if (annotation.user_id === currentUserId) return acc;
+    if (hiddenAnnotationUsers.has(annotation.user_id)) return acc;
 
     const hasPoints = annotation.path.points && annotation.path.points.length > 0;
-    const isActivelyDrawing = activeDrawingRef.current.has(annotation.id);
+    const activeEntry = activeDrawingRef.current.get(annotation.id);
+    if (!hasPoints || !activeEntry?.point) {
+      return acc;
+    }
 
-    return hasPoints && isActivelyDrawing;
-  });
+    const existing = acc.get(annotation.user_id);
+    if (!existing || activeEntry.lastSeen >= existing.lastSeen) {
+      acc.set(annotation.user_id, {
+        annotation,
+        point: activeEntry.point,
+        lastSeen: activeEntry.lastSeen,
+      });
+    }
+
+    return acc;
+  }, new Map());
 
   return (
     <View
@@ -484,10 +604,9 @@ export default function AnnotationLayer({
       </Svg>
 
       {/* Username labels — clamped to stay within the drawing area */}
-      {remoteTempAnnotations.map((annotation) => {
-        const lastPoint = annotation.path.points[annotation.path.points.length - 1];
-        const rawX = (lastPoint.x / 100) * normalizeWidth + imageOffsetX;
-        const rawY = (lastPoint.y / 100) * normalizeHeight + imageOffsetY;
+      {Array.from(remoteTempAnnotations.values()).map(({ annotation, point }) => {
+        const rawX = (point.x / 100) * normalizeWidth + imageOffsetX;
+        const rawY = (point.y / 100) * normalizeHeight + imageOffsetY;
 
         const LABEL_W = 110;
         const LABEL_H = 24;

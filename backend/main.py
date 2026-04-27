@@ -46,6 +46,7 @@ app.add_middleware(
 BASE_DIR = Path(__file__).resolve().parent
 CLOUD_DIR = BASE_DIR / "cloud"
 CLOUD_DIR.mkdir(exist_ok=True)
+HIDDEN_SEED_LIBRARY_PATH = CLOUD_DIR / "hidden_seed_scores.json"
 SEED_LIBRARY_DIR = BASE_DIR / "seed_scores"
 SEED_LIBRARY_DIR.mkdir(exist_ok=True)
 SEED_LIBRARY_AUDIO_DIR = BASE_DIR / "seed_audio"
@@ -80,6 +81,54 @@ jobs: Dict[str, dict] = {}
 
 # Share code mapping: {code: job_id}
 share_codes: Dict[str, str] = {}
+
+
+def _load_hidden_seed_scores() -> Dict[str, Set[str]]:
+    """Load the per-user hidden bundled-score registry from disk."""
+    if not HIDDEN_SEED_LIBRARY_PATH.exists():
+        return {}
+
+    try:
+        raw_data = json.loads(HIDDEN_SEED_LIBRARY_PATH.read_text())
+    except Exception as exc:
+        logger.warning("Failed to read hidden seed score registry: %s", exc)
+        return {}
+
+    hidden_scores: Dict[str, Set[str]] = {}
+    for user_id, hidden_seed_files in raw_data.items():
+        if not isinstance(user_id, str):
+            continue
+        if not isinstance(hidden_seed_files, list):
+            continue
+        hidden_scores[user_id] = {str(seed_file) for seed_file in hidden_seed_files}
+
+    return hidden_scores
+
+
+def _save_hidden_seed_scores(hidden_scores: Dict[str, Set[str]]) -> None:
+    """Persist the per-user hidden bundled-score registry to disk."""
+    serialized = {
+        user_id: sorted(seed_files)
+        for user_id, seed_files in hidden_scores.items()
+        if seed_files
+    }
+    HIDDEN_SEED_LIBRARY_PATH.write_text(json.dumps(serialized, indent=2, sort_keys=True))
+
+
+hidden_seed_scores_by_user: Dict[str, Set[str]] = _load_hidden_seed_scores()
+
+
+def is_seed_score_hidden_for_user(user_id: Optional[str], seed_file_name: str) -> bool:
+    """Return whether a bundled seed score has been hidden for this user."""
+    if not user_id:
+        return False
+    return seed_file_name in hidden_seed_scores_by_user.get(user_id, set())
+
+
+def hide_seed_score_for_user(user_id: str, seed_file_name: str) -> None:
+    """Remember that a bundled seed score should stay hidden for one user."""
+    hidden_seed_scores_by_user.setdefault(user_id, set()).add(seed_file_name)
+    _save_hidden_seed_scores(hidden_seed_scores_by_user)
 
 
 def get_job_dir(job_id: str) -> Path:
@@ -456,15 +505,15 @@ def register_seed_library_score(
     ):
         shutil.copy2(bundled_full_midi, midi_path)
 
-    # For per-user jobs, build a manifest that keeps image paths pointing at the
-    # canonical seed job's files (which are static and shared).  We never call
-    # render_score_pages on a per-user job — that would rewrite paths to the
-    # per-user dir where no SVG files exist.
-    if user_id and not manifest_path.exists() and canonical_manifest.exists():
-        canonical_data = json.loads(canonical_manifest.read_text())
-        user_manifest = dict(canonical_data)
-        user_manifest["job_id"] = job_id
-        manifest_path.write_text(json.dumps(user_manifest, indent=2))
+    # For per-user seeded jobs, copy the canonical pre-rendered pages into the
+    # user cache so any collaborator can open the bundled score immediately.
+    if user_id and canonical_manifest.exists():
+        hydrate_seed_score_pages_from_canonical(
+            job_id=job_id,
+            canonical_job_id=canonical_job_id,
+            musicxml_path=mxl_path,
+            title=existing_job.get("score_metadata", {}).get("title") or seed_file.stem,
+        )
 
     audio_completed = audio_path.exists()
     audio_status = existing_job.get("progress", {}).get("audio_conversion", "not_started")
@@ -487,6 +536,8 @@ def register_seed_library_score(
             "parts": [],
         },
         "original_filename": seed_file.stem,
+        "seed_library_filename": seed_file.name,
+        "seed_library_user_id": user_id,
     }
 
     if (
@@ -898,6 +949,53 @@ def hydrate_bundled_score_pages(job_id: str, musicxml_path: Path, asset_dir: Pat
     return _cache_manifest_for_job(job_id, hydrated_manifest)
 
 
+def hydrate_seed_score_pages_from_canonical(
+    job_id: str,
+    canonical_job_id: str,
+    musicxml_path: Path,
+    title: Optional[str] = None,
+) -> Dict:
+    """Mirror cached seeded-score pages from the canonical job into a user job cache."""
+    canonical_dir = get_job_dir(canonical_job_id)
+    canonical_manifest_path = canonical_dir / "manifest.json"
+    if not canonical_manifest_path.exists():
+        raise FileNotFoundError(f"Canonical seeded score manifest not found: {canonical_manifest_path}")
+
+    canonical_manifest = json.loads(canonical_manifest_path.read_text())
+    job_dir = get_job_dir(job_id)
+    hydrated_pages = []
+
+    for page in canonical_manifest.get("pages", []):
+        image_name = Path(page["image_path"]).name
+        source_image_path = canonical_dir / image_name
+        if not source_image_path.exists():
+            raise FileNotFoundError(f"Canonical seeded score page not found: {source_image_path}")
+
+        target_image_path = job_dir / image_name
+        if (
+            not target_image_path.exists()
+            or source_image_path.stat().st_mtime > target_image_path.stat().st_mtime
+        ):
+            shutil.copy2(source_image_path, target_image_path)
+
+        hydrated_page = dict(page)
+        hydrated_page["image_path"] = f"/api/download/{job_id}/{image_name}"
+        hydrated_pages.append(hydrated_page)
+
+    hydrated_manifest = {
+        "job_id": job_id,
+        "title": title or canonical_manifest.get("title") or "Untitled score",
+        "page_count": canonical_manifest.get("page_count", len(hydrated_pages)),
+        "pages": hydrated_pages,
+        "musicxml_path": f"/api/download/{job_id}/{musicxml_path.name}",
+        "measure_region_version": canonical_manifest.get(
+            "measure_region_version",
+            MEASURE_REGION_VERSION,
+        ),
+    }
+    return _cache_manifest_for_job(job_id, hydrated_manifest)
+
+
 def _normalize_manifest(manifest: Dict, job_id: str, musicxml_path: Optional[Path] = None) -> Dict:
     """Fill in missing fields for older cached page manifests."""
     job_dir = get_job_dir(job_id)
@@ -1196,6 +1294,9 @@ async def root():
 async def get_recent_library_scores(background_tasks: BackgroundTasks, user_id: Optional[str] = None):
     scores = []
     for seed_file in list_seed_library_files(limit=2):
+        if is_seed_score_hidden_for_user(user_id, seed_file.name):
+            continue
+
         # First ensure the canonical seed job has rendered pages (shared by all users).
         canonical_job_id = build_seed_job_id(seed_file)
         canonical_dir = get_job_dir(canonical_job_id)
@@ -1466,10 +1567,18 @@ async def update_score_title(job_id: str, request: UpdateTitleRequest):
 
 
 @app.delete("/api/score/{job_id}")
-async def delete_score(job_id: str):
+async def delete_score(job_id: str, user_id: Optional[str] = None):
     """Delete a score and all its associated files."""
     if job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found")
+
+    job = jobs[job_id]
+    seed_library_filename = job.get("seed_library_filename")
+    seed_library_user_id = job.get("seed_library_user_id")
+    if seed_library_filename and seed_library_user_id:
+        if user_id != seed_library_user_id:
+            raise HTTPException(status_code=403, detail="You can only hide bundled scores for your own account")
+        hide_seed_score_for_user(seed_library_user_id, seed_library_filename)
 
     job_dir = get_job_dir(job_id)
     if job_dir.exists():
