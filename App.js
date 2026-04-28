@@ -19,6 +19,31 @@ export default function App() {
       return undefined;
     }
 
+    const applyNonSelectableSurface = (root) => {
+      if (!(root instanceof Element || root instanceof Document)) {
+        return;
+      }
+
+      const elements =
+        root instanceof Element && root.matches?.('img, svg, canvas')
+          ? [root]
+          : [];
+      const descendants = root.querySelectorAll?.('img, svg, canvas') || [];
+
+      [...elements, ...Array.from(descendants)].forEach((node) => {
+        if (!(node instanceof HTMLElement || node instanceof SVGElement)) {
+          return;
+        }
+
+        node.setAttribute('draggable', 'false');
+        node.style.pointerEvents = 'none';
+        node.style.userSelect = 'none';
+        node.style.webkitUserSelect = 'none';
+        node.style.webkitUserDrag = 'none';
+        node.style.webkitTouchCallout = 'none';
+      });
+    };
+
     const viewportMeta =
       document.querySelector('meta[name="viewport"]') || document.createElement('meta');
     const previousViewport = viewportMeta.getAttribute('content');
@@ -33,8 +58,12 @@ export default function App() {
 
     const previousHtmlTouchAction = document.documentElement.style.touchAction;
     const previousBodyTouchAction = document.body.style.touchAction;
+    const previousBodyWebkitTouchCallout = document.body.style.webkitTouchCallout;
+    const previousBodyWebkitUserSelect = document.body.style.webkitUserSelect;
     document.documentElement.style.touchAction = 'manipulation';
     document.body.style.touchAction = 'manipulation';
+    document.body.style.webkitTouchCallout = 'none';
+    document.body.style.webkitUserSelect = 'none';
     let lastTouchEndTime = 0;
 
     const interactionStyle = document.createElement('style');
@@ -56,8 +85,10 @@ export default function App() {
       }
 
       img,
-      svg {
+      svg,
+      canvas {
         -webkit-user-drag: none;
+        user-drag: none;
       }
 
       input,
@@ -74,6 +105,7 @@ export default function App() {
       #root,
       #root * {
         touch-action: manipulation;
+        overscroll-behavior: none;
       }
 
       html *::selection,
@@ -144,8 +176,20 @@ export default function App() {
     document.addEventListener('touchmove', preventBrowserZoom, { passive: false });
     document.addEventListener('touchend', preventDoubleTapZoom, { passive: false });
     document.addEventListener('dblclick', preventDoubleClickZoom, { passive: false, capture: true });
+    document.addEventListener('contextmenu', preventSelection, { passive: false, capture: true });
+    document.addEventListener('selectionchange', clearSelection);
     document.addEventListener('selectstart', preventSelection);
     document.addEventListener('dragstart', preventSelection);
+
+    applyNonSelectableSurface(document);
+    const domObserver = new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        mutation.addedNodes.forEach((node) => {
+          applyNonSelectableSurface(node);
+        });
+      });
+    });
+    domObserver.observe(document.body, { childList: true, subtree: true });
 
     return () => {
       document.removeEventListener('gesturestart', preventBrowserZoom);
@@ -154,11 +198,16 @@ export default function App() {
       document.removeEventListener('touchmove', preventBrowserZoom);
       document.removeEventListener('touchend', preventDoubleTapZoom);
       document.removeEventListener('dblclick', preventDoubleClickZoom, true);
+      document.removeEventListener('contextmenu', preventSelection, true);
+      document.removeEventListener('selectionchange', clearSelection);
       document.removeEventListener('selectstart', preventSelection);
       document.removeEventListener('dragstart', preventSelection);
       document.documentElement.style.touchAction = previousHtmlTouchAction;
       document.body.style.touchAction = previousBodyTouchAction;
+      document.body.style.webkitTouchCallout = previousBodyWebkitTouchCallout;
+      document.body.style.webkitUserSelect = previousBodyWebkitUserSelect;
       interactionStyle.remove();
+      domObserver.disconnect();
 
       if (previousViewport) {
         viewportMeta.setAttribute('content', previousViewport);

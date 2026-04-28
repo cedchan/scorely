@@ -3,8 +3,35 @@ import Constants from 'expo-constants';
 
 // Use HTTPS by default for better security and iPad camera access
 const DEFAULT_API_BASE_URL = 'https://localhost:8443';
+const EXPO_PUBLIC_API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL;
 
 const normalizeUrl = (url) => url.replace(/\/+$/, '');
+
+const extractHost = (value) => {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const normalized = value.includes('://') ? value : `exp://${value}`;
+    return new URL(normalized).hostname || null;
+  } catch {
+    return value.split('/')[0].split(':')[0] || null;
+  }
+};
+
+const getConfiguredApiBaseUrl = () => {
+  if (EXPO_PUBLIC_API_BASE_URL) {
+    return normalizeUrl(EXPO_PUBLIC_API_BASE_URL);
+  }
+
+  const manifestOverride = Constants.expoConfig?.extra?.apiBaseUrl;
+  if (manifestOverride) {
+    return normalizeUrl(manifestOverride);
+  }
+
+  return null;
+};
 
 const getWebApiBaseUrl = () => {
   if (typeof window === 'undefined') {
@@ -51,14 +78,22 @@ export const getApiBaseUrl = () => {
     return getWebApiBaseUrl();
   }
 
-  // For iOS/iPad, use HTTPS with the local network IP
-  const hostUri =
-    Constants.expoConfig?.hostUri ||
-    Constants.expoGoConfig?.debuggerHost ||
-    Constants.manifest2?.extra?.expoGo?.debuggerHost;
+  const configured = getConfiguredApiBaseUrl();
+  if (configured) {
+    return configured;
+  }
 
-  if (hostUri) {
-    const host = hostUri.split(':')[0];
+  // For iOS/iPad, use HTTPS with the local network IP
+  const host =
+    extractHost(
+      Constants.expoConfig?.hostUri ||
+      Constants.expoGoConfig?.debuggerHost ||
+      Constants.manifest2?.extra?.expoGo?.debuggerHost
+    ) ||
+    extractHost(Constants.linkingUri) ||
+    extractHost(Constants.experienceUrl);
+
+  if (host) {
     return `https://${host}:8443`;
   }
 

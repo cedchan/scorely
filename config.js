@@ -11,7 +11,7 @@ export const config = {
     showDebug: false,
 
     // Keep the camera feed hidden while still allowing gesture detection to run
-    showCameraPreview: false,
+    showCameraPreview: true,
 
     // Movement thresholds (0-1 scale, where larger = more movement required)
     downThreshold: 0.01,  // How much you need to nod down to trigger
@@ -21,7 +21,7 @@ export const config = {
     turnThreshold: 0.15,
 
     // Tilt thresholds (vertical eye difference)
-    tiltThreshold: 0.03,
+    tiltThreshold: 0.015,
 
     // Mouth open threshold (distance between lips)
     mouthThreshold: 0.04,
@@ -42,7 +42,7 @@ export const config = {
   // ===== Annotation Debug Settings =====
   annotationDebug: {
     // Show the web ink diagnostics overlay while drawing annotations
-    showInkDebug: true,
+    showInkDebug: false,
   },
 
   // ===== Add more settings here as needed =====

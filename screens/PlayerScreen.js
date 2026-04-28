@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -55,6 +55,7 @@ const TOOLBAR_CONTROL_SIZE = 44;
 const TOOLBAR_TEXT_SIZE = 16;
 const TOOLBAR_BUTTON_HORIZONTAL_PADDING = 10;
 const TOOLBAR_BUTTON_GAP = 6;
+const EMPTY_ANNOTATIONS = [];
 
 export default function PlayerScreen({ route, navigation }) {
   const { width, height } = useWindowDimensions();
@@ -100,6 +101,7 @@ export default function PlayerScreen({ route, navigation }) {
   const [backwardMenuLayout, setBackwardMenuLayout] = useState(null);
   const [forwardMenuLayout, setForwardMenuLayout] = useState(null);
   const [usersMenuLayout, setUsersMenuLayout] = useState(null);
+  const [toolbarScrollX, setToolbarScrollX] = useState(0);
   const toolbarWrapperRef = useRef(null);
   const backwardButtonRef = useRef(null);
   const forwardButtonRef = useRef(null);
@@ -115,9 +117,30 @@ export default function PlayerScreen({ route, navigation }) {
     );
   };
 
+  const getDropdownLeft = useCallback(
+    (layout) => Math.max(0, layout.x - toolbarScrollX),
+    [toolbarScrollX]
+  );
+
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const faceLandmarkerRef = useRef(null);
+
+  const annotationsByPage = useMemo(() => {
+    const grouped = new Map();
+
+    annotations.forEach((annotation) => {
+      const pageKey = annotation.page_number;
+      if (!grouped.has(pageKey)) {
+        grouped.set(pageKey, [annotation]);
+        return;
+      }
+
+      grouped.get(pageKey).push(annotation);
+    });
+
+    return grouped;
+  }, [annotations]);
   const animationFrameRef = useRef(null);
   const [cameraEnabled, setCameraEnabled] = useState(false);
   const [cameraError, setCameraError] = useState(null);
@@ -424,6 +447,10 @@ export default function PlayerScreen({ route, navigation }) {
     };
 
     const handleAnnotationAdded = ({ annotation }) => {
+      if (annotation?._isTemp === true && annotation.user_id === userId) {
+        return;
+      }
+
       setAnnotations((prev) => {
         const existingIndex = prev.findIndex((a) => a.id === annotation.id);
         if (existingIndex !== -1) {
@@ -434,6 +461,10 @@ export default function PlayerScreen({ route, navigation }) {
     };
 
     const handleAnnotationUpdated = ({ annotation }) => {
+      if (annotation?._isTemp === true && annotation.user_id === userId) {
+        return;
+      }
+
       setAnnotations((prev) => {
         const existingIndex = prev.findIndex((a) => a.id === annotation.id);
         const isTemp = annotation._isTemp === true;
@@ -931,8 +962,8 @@ export default function PlayerScreen({ route, navigation }) {
   const handleTiltDetection = (leftEyeY, rightEyeY) => {
     const now = Date.now();
     const tiltDelta = leftEyeY - rightEyeY;
-    const TILT_THRESHOLD = 0.02;
-    const RESET_THRESHOLD = 0.008;
+    const TILT_THRESHOLD = config.nodDetection?.tiltThreshold ?? 0.015;
+    const RESET_THRESHOLD = TILT_THRESHOLD * 0.4;
     const cooldownMs = config.nodDetection?.cooldownMs || 1000;
   
     if (Math.abs(tiltDelta) < RESET_THRESHOLD) {
@@ -1235,7 +1266,7 @@ export default function PlayerScreen({ route, navigation }) {
     }
   };
 
-  const handleAnnotationCreated = (annotation) => {
+  const handleAnnotationCreated = useCallback((annotation) => {
     if (annotation._isFinal) {
       annotationSyncService.addAnnotation(annotation);
       setAnnotations((prev) => {
@@ -1244,25 +1275,30 @@ export default function PlayerScreen({ route, navigation }) {
       });
     } else {
       annotationSyncService.addAnnotation(annotation);
-      setAnnotations((prev) => [...prev, annotation]);
+      if (annotation.user_id !== userId) {
+        setAnnotations((prev) => [...prev, annotation]);
+      }
     }
-  };
+  }, [userId]);
 
-  const handleAnnotationUpdated = (annotation) => {
+  const handleAnnotationUpdated = useCallback((annotation) => {
     if (annotation._deleted) {
       annotationSyncService.deleteAnnotation(annotation.id);
       setAnnotations((prev) => prev.filter((a) => a.id !== annotation.id));
     } else if (annotation._isTemp) {
       annotationSyncService.updateAnnotation(annotation);
-      setAnnotations((prev) => {
-        const existingIndex = prev.findIndex((a) => a.id === annotation.id);
-        if (existingIndex !== -1) {
-          const next = prev.slice();
-          next[existingIndex] = annotation;
-          return next;
-        }
-        return [...prev, annotation];
-      });
+      // The live canvas already renders our in-progress stroke locally.
+      if (annotation.user_id !== userId) {
+        setAnnotations((prev) => {
+          const existingIndex = prev.findIndex((a) => a.id === annotation.id);
+          if (existingIndex !== -1) {
+            const next = prev.slice();
+            next[existingIndex] = annotation;
+            return next;
+          }
+          return [...prev, annotation];
+        });
+      }
     } else {
       // Final update — upsert so fast strokes that skipped temp still get saved
       annotationSyncService.updateAnnotation(annotation);
@@ -1277,7 +1313,7 @@ export default function PlayerScreen({ route, navigation }) {
         return [...prev, finalAnnotation];
       });
     }
-  };
+  }, [userId]);
 
   const handleClearAllAnnotations = () => {
     const pageAnnotations = annotations.filter((ann) => ann.page_number === currentPage + 1);
@@ -1624,6 +1660,8 @@ export default function PlayerScreen({ route, navigation }) {
           style={styles.toolbarScrollView}
           contentContainerStyle={styles.toolbarScrollContent}
           keyboardShouldPersistTaps="handled"
+          onScroll={(event) => setToolbarScrollX(event.nativeEvent.contentOffset.x)}
+          scrollEventThrottle={16}
         >
           <View style={styles.toolbarRow}>
             <TouchableOpacity
@@ -1731,7 +1769,7 @@ export default function PlayerScreen({ route, navigation }) {
 
         {/* Dropdown menus rendered outside ScrollView so they aren't clipped */}
         {showBackwardMenu && backwardMenuLayout && (
-          <View style={[styles.motionDropdown, { left: backwardMenuLayout.x }]}>
+          <View style={[styles.motionDropdown, { left: getDropdownLeft(backwardMenuLayout) }]}>
             {renderMotionOption(backwardMotion, 'manual', 'Manual', selectBackwardMotion, false, false)}
             {renderMotionOption(backwardMotion, 'nod', 'Nod', selectBackwardMotion, false, forwardMotion === 'nod')}
             {renderMotionOption(backwardMotion, 'turn_left', 'Turn Left', selectBackwardMotion, false, forwardMotion === 'turn_left')}
@@ -1742,7 +1780,7 @@ export default function PlayerScreen({ route, navigation }) {
           </View>
         )}
         {showForwardMenu && forwardMenuLayout && (
-          <View style={[styles.motionDropdown, { left: forwardMenuLayout.x }]}>
+          <View style={[styles.motionDropdown, { left: getDropdownLeft(forwardMenuLayout) }]}>
             {renderMotionOption(forwardMotion, 'manual', 'Manual', selectForwardMotion, false, false)}
             {renderMotionOption(forwardMotion, 'nod', 'Nod', selectForwardMotion, false, backwardMotion === 'nod')}
             {renderMotionOption(forwardMotion, 'turn_left', 'Turn Left', selectForwardMotion, false, backwardMotion === 'turn_left')}
@@ -1769,7 +1807,7 @@ export default function PlayerScreen({ route, navigation }) {
           });
           return (
             <View
-              style={[styles.visibilityDropdown, { left: usersMenuLayout.x }]}
+              style={[styles.visibilityDropdown, { left: getDropdownLeft(usersMenuLayout) }]}
               onStartShouldSetResponder={() => true}
             >
               {usersWithAnnotations.length > 0 ? (
@@ -1933,6 +1971,7 @@ export default function PlayerScreen({ route, navigation }) {
                       <>
                         <View style={styles.imageContainer}>
                           <View
+                            pointerEvents="none"
                             style={[
                               styles.pageAssetFrame,
                               {
@@ -2053,7 +2092,7 @@ export default function PlayerScreen({ route, navigation }) {
                             imageHeight={displayedHeight}
                             imageOffsetX={imageOffsetX}
                             imageOffsetY={imageOffsetY}
-                            annotations={annotations}
+                            annotations={annotationsByPage.get(item.page_number) || EMPTY_ANNOTATIONS}
                             currentTool={currentTool}
                             currentColor={currentColor}
                             currentStrokeWidth={currentStrokeWidth}
@@ -2491,10 +2530,26 @@ const styles = StyleSheet.create({
   pageImage: {
     width: '100%',
     height: '100%',
+    pointerEvents: 'none',
+    ...(Platform.OS === 'web'
+      ? {
+          userSelect: 'none',
+          WebkitUserDrag: 'none',
+          WebkitTouchCallout: 'none',
+        }
+      : {}),
   },
   pageSvg: {
     width: '100%',
     height: '100%',
+    pointerEvents: 'none',
+    ...(Platform.OS === 'web'
+      ? {
+          userSelect: 'none',
+          WebkitUserDrag: 'none',
+          WebkitTouchCallout: 'none',
+        }
+      : {}),
   },
   imageContainer: {
     justifyContent: 'center',

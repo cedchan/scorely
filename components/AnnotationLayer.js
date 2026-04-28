@@ -9,6 +9,46 @@ const COLORS = {
   darkBrown: '#58392F',
 };
 
+const WEB_LIVE_SYNC_INTERVAL_MS = 48;
+const WEB_MIN_POINT_DISTANCE = 0.18;
+
+function normalizedPointToCanvasPixel(point, normalizeWidth, normalizeHeight, imageOffsetX, imageOffsetY) {
+  return {
+    x: (point.x / 100) * normalizeWidth + imageOffsetX,
+    y: (point.y / 100) * normalizeHeight + imageOffsetY,
+  };
+}
+
+function shouldKeepPoint(lastPoint, nextPoint, minDistance = 0) {
+  if (!lastPoint) {
+    return true;
+  }
+
+  const dx = nextPoint.x - lastPoint.x;
+  const dy = nextPoint.y - lastPoint.y;
+  return (dx * dx) + (dy * dy) >= minDistance * minDistance;
+}
+
+function simplifyPointsForLiveSync(points) {
+  if (!points || points.length <= 12) {
+    return points || [];
+  }
+
+  const simplified = [points[0]];
+  const step = points.length > 48 ? 3 : 2;
+
+  for (let index = step; index < points.length - 1; index += step) {
+    simplified.push(points[index]);
+  }
+
+  const lastPoint = points[points.length - 1];
+  if (simplified[simplified.length - 1] !== lastPoint) {
+    simplified.push(lastPoint);
+  }
+
+  return simplified;
+}
+
 function pointsToRawPathStringStatic(points, normalizeWidth, normalizeHeight, imageOffsetX, imageOffsetY) {
   if (!points || points.length === 0) return '';
 
@@ -37,13 +77,6 @@ function pointsToRawPathStringStatic(points, normalizeWidth, normalizeHeight, im
   return d;
 }
 
-function pointsToCanvasPixels(points, normalizeWidth, normalizeHeight, imageOffsetX, imageOffsetY) {
-  return (points || []).map((point) => ({
-    x: (point.x / 100) * normalizeWidth + imageOffsetX,
-    y: (point.y / 100) * normalizeHeight + imageOffsetY,
-  }));
-}
-
 function tracePolylineOnCanvas(
   ctx,
   points,
@@ -53,34 +86,54 @@ function tracePolylineOnCanvas(
   imageOffsetY,
   startIndex = 0
 ) {
-  const px = pointsToCanvasPixels(points, normalizeWidth, normalizeHeight, imageOffsetX, imageOffsetY);
-  if (!px.length) {
+  if (!points?.length) {
     return false;
   }
 
-  if (px.length === 1) {
+  if (points.length === 1) {
+    const point = normalizedPointToCanvasPixel(
+      points[0],
+      normalizeWidth,
+      normalizeHeight,
+      imageOffsetX,
+      imageOffsetY
+    );
     ctx.beginPath();
-    ctx.arc(px[0].x, px[0].y, Math.max(1, ctx.lineWidth / 2), 0, Math.PI * 2);
+    ctx.arc(point.x, point.y, Math.max(1, ctx.lineWidth / 2), 0, Math.PI * 2);
     ctx.fillStyle = ctx.strokeStyle;
     ctx.globalAlpha = 1;
     ctx.fill();
     return true;
   }
 
-  const clampedStart = Math.max(0, Math.min(startIndex, px.length - 1));
+  const clampedStart = Math.max(0, Math.min(startIndex, points.length - 1));
   const moveIndex = clampedStart > 0 ? clampedStart - 1 : 0;
+  const firstPoint = normalizedPointToCanvasPixel(
+    points[moveIndex],
+    normalizeWidth,
+    normalizeHeight,
+    imageOffsetX,
+    imageOffsetY
+  );
 
   ctx.beginPath();
-  ctx.moveTo(px[moveIndex].x, px[moveIndex].y);
+  ctx.moveTo(firstPoint.x, firstPoint.y);
 
-  for (let index = moveIndex + 1; index < px.length; index += 1) {
-    ctx.lineTo(px[index].x, px[index].y);
+  for (let index = moveIndex + 1; index < points.length; index += 1) {
+    const point = normalizedPointToCanvasPixel(
+      points[index],
+      normalizeWidth,
+      normalizeHeight,
+      imageOffsetX,
+      imageOffsetY
+    );
+    ctx.lineTo(point.x, point.y);
   }
 
   return true;
 }
 
-export default function AnnotationLayer({
+function AnnotationLayer({
   pageNumber,
   width,
   height,
@@ -112,6 +165,8 @@ export default function AnnotationLayer({
   const updateThrottleRef = useRef(null);
   const lastUpdateTimeRef = useRef(0);
   const pendingUpdateRef = useRef(null);
+  const liveDrawFrameRef = useRef(null);
+  const lastDrawnPointCountRef = useRef(0);
   const eraserRadius = 20;
   const strokeIdCounterRef = useRef(0);
   const tempSignaturesRef = useRef(new Map());
@@ -193,6 +248,9 @@ export default function AnnotationLayer({
   };
 
   const flushDebugOverlay = (force = false) => {
+    if (!config.annotationDebug.showInkDebug) {
+      return;
+    }
     const now = Date.now();
     if (!force && now - lastDebugFlushRef.current < 80) {
       return;
@@ -217,6 +275,9 @@ export default function AnnotationLayer({
   };
 
   const resetDebugMetrics = (inputMode = '') => {
+    if (!config.annotationDebug.showInkDebug) {
+      return;
+    }
     const now = Date.now();
     debugMetricsRef.current = {
       inputMode,
@@ -238,6 +299,9 @@ export default function AnnotationLayer({
   };
 
   const recordDebugSamples = (sampleCount, pointerEventCount = 1, inputMode = '') => {
+    if (!config.annotationDebug.showInkDebug) {
+      return;
+    }
     const now = Date.now();
     const metrics = debugMetricsRef.current;
     const nextTotal = metrics.totalPoints + sampleCount;
@@ -275,6 +339,9 @@ export default function AnnotationLayer({
   };
 
   const finishDebugMetrics = () => {
+    if (!config.annotationDebug.showInkDebug) {
+      return;
+    }
     debugMetricsRef.current = {
       ...debugMetricsRef.current,
       strokeActive: false,
@@ -284,6 +351,7 @@ export default function AnnotationLayer({
 
   const sendLiveUpdate = useRef((points) => {
     if (!onAnnotationUpdatedRef.current || !tempAnnotationIdRef.current) return;
+    const syncPoints = isWebCanvas ? simplifyPointsForLiveSync(points) : points;
     onAnnotationUpdatedRef.current({
       id: tempAnnotationIdRef.current,
       job_id: '',
@@ -292,7 +360,7 @@ export default function AnnotationLayer({
       user_id: currentUserIdRef.current,
       timestamp: Date.now() / 1000,
       path: {
-        points,
+        points: syncPoints,
         color: currentColorRef.current,
         strokeWidth: currentStrokeWidthRef.current,
         opacity: 1.0,
@@ -304,7 +372,7 @@ export default function AnnotationLayer({
   const sendThrottledLiveUpdate = useRef((points) => {
     const now = Date.now();
     const timeSinceLastUpdate = now - lastUpdateTimeRef.current;
-    const UPDATE_INTERVAL = 16;
+    const UPDATE_INTERVAL = isWebCanvas ? WEB_LIVE_SYNC_INTERVAL_MS : 16;
 
     pendingUpdateRef.current = points;
 
@@ -378,6 +446,7 @@ export default function AnnotationLayer({
       clearTimeout(updateThrottleRef.current);
       updateThrottleRef.current = null;
     }
+    cancelScheduledLiveDraw();
 
     const finalPoints = currentPathPointsRef.current.slice();
     const frozenPathString = pointsToRawPathStringStatic(
@@ -406,6 +475,7 @@ export default function AnnotationLayer({
     });
 
     currentPathPointsRef.current = [];
+    lastDrawnPointCountRef.current = 0;
     if (isWebCanvas) {
       redrawLiveCanvas();
     } else {
@@ -447,11 +517,14 @@ export default function AnnotationLayer({
   const staticCanvasRef = useRef(null);
   const liveCanvasRef = useRef(null);
   const isWebCanvas = Platform.OS === 'web';
-  const pageAnnotations = annotations.filter((ann) => {
-    if (ann.page_number !== pageNumber) return false;
-    if (hiddenAnnotationUsers.has(ann.user_id)) return false;
-    return true;
-  });
+  const pageAnnotations = useMemo(
+    () =>
+      annotations.filter((ann) => {
+        if (hiddenAnnotationUsers.has(ann.user_id)) return false;
+        return true;
+      }),
+    [annotations, hiddenAnnotationUsers]
+  );
   const pathAnnotations = useMemo(
     () => pageAnnotations.filter((annotation) => annotation.type === 'path' && annotation.path),
     [pageAnnotations]
@@ -507,6 +580,15 @@ export default function AnnotationLayer({
     configureCanvas(liveCanvasRef.current, { clear: true });
   };
 
+  const cancelScheduledLiveDraw = () => {
+    if (!isWebCanvas || liveDrawFrameRef.current === null) {
+      return;
+    }
+
+    window.cancelAnimationFrame(liveDrawFrameRef.current);
+    liveDrawFrameRef.current = null;
+  };
+
   const drawLiveStrokeSegment = (points, startIndex = 0) => {
     if (!isWebCanvas || !liveCanvasRef.current || !points.length) {
       return;
@@ -541,6 +623,7 @@ export default function AnnotationLayer({
       return;
     }
 
+    cancelScheduledLiveDraw();
     const ctx = configureCanvas(liveCanvasRef.current, { clear: true });
     if (!ctx) {
       return;
@@ -583,10 +666,36 @@ export default function AnnotationLayer({
     ctx.globalAlpha = 1;
   };
 
+  const scheduleLiveStrokeDraw = () => {
+    if (!isWebCanvas || liveDrawFrameRef.current !== null) {
+      return;
+    }
+
+    liveDrawFrameRef.current = window.requestAnimationFrame(() => {
+      liveDrawFrameRef.current = null;
+      const points = currentPathPointsRef.current;
+
+      if (!points.length) {
+        clearLiveCanvas();
+        lastDrawnPointCountRef.current = 0;
+        return;
+      }
+
+      const startIndex =
+        lastDrawnPointCountRef.current > 0
+          ? Math.max(0, lastDrawnPointCountRef.current - 1)
+          : 0;
+
+      drawLiveStrokeSegment(points, startIndex);
+      lastDrawnPointCountRef.current = points.length;
+    });
+  };
+
   const setCurrentStrokePoints = (points) => {
     currentPathPointsRef.current = points;
     if (isWebCanvas) {
-      drawLiveStrokeSegment(points, 0);
+      lastDrawnPointCountRef.current = 0;
+      scheduleLiveStrokeDraw();
     } else {
       setCurrentPathPoints(points);
     }
@@ -601,7 +710,9 @@ export default function AnnotationLayer({
   };
 
   const clearCurrentStroke = () => {
+    cancelScheduledLiveDraw();
     currentPathPointsRef.current = [];
+    lastDrawnPointCountRef.current = 0;
     if (isWebCanvas) {
       clearLiveCanvas();
     } else {
@@ -647,9 +758,10 @@ export default function AnnotationLayer({
       const appendedPoints = [];
       let lastPoint =
         currentPathPointsRef.current[currentPathPointsRef.current.length - 1] || null;
+      const minDistance = isWebCanvas ? WEB_MIN_POINT_DISTANCE : 0;
 
       nextPoints.forEach((point) => {
-        if (lastPoint && lastPoint.x === point.x && lastPoint.y === point.y) {
+        if (!shouldKeepPoint(lastPoint, point, minDistance)) {
           return;
         }
         appendedPoints.push(point);
@@ -664,15 +776,14 @@ export default function AnnotationLayer({
         recordDebugSamples(appendedPoints.length, pointerEventCount);
       }
 
-      const newPoints = [...currentPathPointsRef.current, ...appendedPoints];
       if (isWebCanvas) {
-        const previousLength = currentPathPointsRef.current.length;
-        currentPathPointsRef.current = newPoints;
-        drawLiveStrokeSegment(newPoints, Math.max(0, previousLength - 1));
+        currentPathPointsRef.current.push(...appendedPoints);
+        scheduleLiveStrokeDraw();
       } else {
+        const newPoints = [...currentPathPointsRef.current, ...appendedPoints];
         setCurrentStrokePoints(newPoints);
       }
-      sendThrottledLiveUpdate(newPoints);
+      sendThrottledLiveUpdate(currentPathPointsRef.current);
       return;
     }
 
@@ -730,6 +841,7 @@ export default function AnnotationLayer({
     if (updateThrottleRef.current) {
       clearTimeout(updateThrottleRef.current);
     }
+    cancelScheduledLiveDraw();
     lingerTimersRef.current.forEach((timer) => clearTimeout(timer));
   }, []);
 
@@ -835,12 +947,25 @@ export default function AnnotationLayer({
     }
 
     const element = containerRef.current;
+    element.dataset.scorelyNoSelect = 'true';
     element.style.touchAction = 'none';
     element.style.webkitUserSelect = 'none';
     element.style.userSelect = 'none';
     element.style.webkitTouchCallout = 'none';
     element.style.webkitTapHighlightColor = 'transparent';
     element.style.caretColor = 'transparent';
+    element.style.webkitUserDrag = 'none';
+    element.setAttribute('draggable', 'false');
+
+    const dragTargets = element.querySelectorAll?.('img, svg, canvas');
+    dragTargets?.forEach((target) => {
+      if (target instanceof HTMLElement || target instanceof SVGElement) {
+        target.setAttribute('draggable', 'false');
+        target.style.webkitUserDrag = 'none';
+        target.style.webkitTouchCallout = 'none';
+        target.style.userSelect = 'none';
+      }
+    });
 
     const getRelativePoint = (event) => {
       const rect = element.getBoundingClientRect();
@@ -852,6 +977,7 @@ export default function AnnotationLayer({
 
     const preventNativeUi = (event) => {
       event.preventDefault();
+      event.stopPropagation();
     };
 
     // Prefer pointer events over touch events: pointer events support getCoalescedEvents(),
@@ -870,8 +996,13 @@ export default function AnnotationLayer({
     const touchOptions = { passive: false };
 
     const handleTouchStart = (event) => {
-      if (!enabledRef.current || activeTouchIdRef.current !== null) {
+      if (!enabledRef.current) {
         return;
+      }
+
+      if (activeTouchIdRef.current !== null) {
+        cancelInteraction();
+        activeTouchIdRef.current = null;
       }
 
       const touch = event.changedTouches?.[0];
@@ -933,6 +1064,11 @@ export default function AnnotationLayer({
         return;
       }
 
+      if (activePointerIdRef.current !== null) {
+        cancelInteraction();
+        activePointerIdRef.current = null;
+      }
+
       activePointerIdRef.current = event.pointerId;
       if (typeof element.setPointerCapture === 'function') {
         element.setPointerCapture(event.pointerId);
@@ -958,42 +1094,6 @@ export default function AnnotationLayer({
         return buildNormalizedPoint(point.x, point.y);
       });
       moveInteractionPoints(points, sourceEvents.length);
-
-      // Draw predicted points as a faint lookahead — they get overwritten on the next real move
-      if (currentToolRef.current === 'pen' && liveCanvasRef.current) {
-        const predicted =
-          typeof event.getPredictedEvents === 'function' ? event.getPredictedEvents() : [];
-        if (predicted.length) {
-          const predictedPoints = predicted.map((pe) => {
-            const point = getRelativePoint(pe);
-            return buildNormalizedPoint(point.x, point.y);
-          });
-          const allPoints = [...currentPathPointsRef.current, ...predictedPoints];
-          const ctx = liveCanvasRef.current.getContext('2d', { desynchronized: true });
-          if (ctx) {
-            const dpr = window.devicePixelRatio || 1;
-            ctx.save();
-            ctx.strokeStyle = currentColorRef.current;
-            ctx.lineWidth = currentStrokeWidthRef.current;
-            ctx.globalAlpha = 0.4;
-            ctx.lineCap = 'round';
-            ctx.lineJoin = 'round';
-            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-            if (tracePolylineOnCanvas(
-              ctx,
-              allPoints,
-              normalizeWidthRef.current,
-              normalizeHeightRef.current,
-              imageOffsetXRef.current,
-              imageOffsetYRef.current,
-              Math.max(0, currentPathPointsRef.current.length - 1)
-            )) {
-              ctx.stroke();
-            }
-            ctx.restore();
-          }
-        }
-      }
     };
 
     const finishPointer = (event, cancel = false) => {
@@ -1019,39 +1119,68 @@ export default function AnnotationLayer({
     const handlePointerUp = (event) => finishPointer(event, false);
     const handlePointerCancel = (event) => finishPointer(event, true);
     const handleTouchCancel = (event) => finishTouch(event, true);
+    const handleLostPointerCapture = () => {
+      if (activePointerIdRef.current === null) {
+        return;
+      }
 
+      activePointerIdRef.current = null;
+      cancelInteraction();
+    };
+
+    const pointerOptions = { passive: false, capture: true };
     if (supportsPointer) {
-      element.addEventListener('pointerdown', handlePointerDown);
-      element.addEventListener('pointermove', handlePointerMove);
-      element.addEventListener('pointerup', handlePointerUp);
-      element.addEventListener('pointercancel', handlePointerCancel);
+      element.addEventListener('pointerdown', handlePointerDown, pointerOptions);
+      element.addEventListener('pointermove', handlePointerMove, pointerOptions);
+      element.addEventListener('pointerup', handlePointerUp, pointerOptions);
+      element.addEventListener('pointercancel', handlePointerCancel, pointerOptions);
+      element.addEventListener('lostpointercapture', handleLostPointerCapture, pointerOptions);
+      window.addEventListener('pointerup', handlePointerUp, pointerOptions);
+      window.addEventListener('pointercancel', handlePointerCancel, pointerOptions);
     } else {
       element.addEventListener('touchstart', handleTouchStart, touchOptions);
       element.addEventListener('touchmove', handleTouchMove, touchOptions);
       element.addEventListener('touchend', finishTouch, touchOptions);
       element.addEventListener('touchcancel', handleTouchCancel, touchOptions);
+      window.addEventListener('touchend', finishTouch, touchOptions);
+      window.addEventListener('touchcancel', handleTouchCancel, touchOptions);
     }
-    element.addEventListener('contextmenu', preventNativeUi, touchOptions);
-    element.addEventListener('selectstart', preventNativeUi, touchOptions);
-    element.addEventListener('dragstart', preventNativeUi, touchOptions);
+    const captureOptions = { passive: false, capture: true };
+    element.addEventListener('gesturestart', preventNativeUi, captureOptions);
+    element.addEventListener('gesturechange', preventNativeUi, captureOptions);
+    element.addEventListener('gestureend', preventNativeUi, captureOptions);
+    element.addEventListener('contextmenu', preventNativeUi, captureOptions);
+    element.addEventListener('selectstart', preventNativeUi, captureOptions);
+    element.addEventListener('dragstart', preventNativeUi, captureOptions);
+    element.addEventListener('drop', preventNativeUi, captureOptions);
 
     return () => {
       if (supportsPointer) {
-        element.removeEventListener('pointerdown', handlePointerDown);
-        element.removeEventListener('pointermove', handlePointerMove);
-        element.removeEventListener('pointerup', handlePointerUp);
-        element.removeEventListener('pointercancel', handlePointerCancel);
+        element.removeEventListener('pointerdown', handlePointerDown, pointerOptions);
+        element.removeEventListener('pointermove', handlePointerMove, pointerOptions);
+        element.removeEventListener('pointerup', handlePointerUp, pointerOptions);
+        element.removeEventListener('pointercancel', handlePointerCancel, pointerOptions);
+        element.removeEventListener('lostpointercapture', handleLostPointerCapture, pointerOptions);
+        window.removeEventListener('pointerup', handlePointerUp, pointerOptions);
+        window.removeEventListener('pointercancel', handlePointerCancel, pointerOptions);
       } else {
         element.removeEventListener('touchstart', handleTouchStart, touchOptions);
         element.removeEventListener('touchmove', handleTouchMove, touchOptions);
         element.removeEventListener('touchend', finishTouch, touchOptions);
         element.removeEventListener('touchcancel', handleTouchCancel, touchOptions);
+        window.removeEventListener('touchend', finishTouch, touchOptions);
+        window.removeEventListener('touchcancel', handleTouchCancel, touchOptions);
       }
-      element.removeEventListener('contextmenu', preventNativeUi, touchOptions);
-      element.removeEventListener('selectstart', preventNativeUi, touchOptions);
-      element.removeEventListener('dragstart', preventNativeUi, touchOptions);
+      element.removeEventListener('gesturestart', preventNativeUi, captureOptions);
+      element.removeEventListener('gesturechange', preventNativeUi, captureOptions);
+      element.removeEventListener('gestureend', preventNativeUi, captureOptions);
+      element.removeEventListener('contextmenu', preventNativeUi, captureOptions);
+      element.removeEventListener('selectstart', preventNativeUi, captureOptions);
+      element.removeEventListener('dragstart', preventNativeUi, captureOptions);
+      element.removeEventListener('drop', preventNativeUi, captureOptions);
       activePointerIdRef.current = null;
       activeTouchIdRef.current = null;
+      delete element.dataset.scorelyNoSelect;
     };
   }, [isWebCanvas]);
 
@@ -1335,6 +1464,8 @@ export default function AnnotationLayer({
     </View>
   );
 }
+
+export default React.memo(AnnotationLayer);
 
 const styles = StyleSheet.create({
   container: {

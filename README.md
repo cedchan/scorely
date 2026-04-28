@@ -36,6 +36,24 @@ The app uses HTTPS via nginx reverse proxy with mkcert certificates. To test on 
 
 **Alternative:** If you need remote access outside your local network, use `ENABLE_TUNNELS=1 ./start.sh` to create public HTTPS tunnels via localtunnel (less stable, only use if necessary).
 
+### For iPad Testing In Expo Go
+
+Expo Go can load the native app over LAN, but the API endpoint needs to be reachable from the iPad too.
+
+1. Start the backend stack so the API is available on your Mac:
+   `PATH="/Applications/Docker.app/Contents/Resources/bin:$PATH" /Applications/Docker.app/Contents/Resources/bin/docker compose up --build -d`
+2. Start Expo:
+   `npx expo start --host lan`
+3. Open the project in Expo Go on the iPad.
+
+If Expo Go can open the app but API requests fail, create a local `.env.local` file with an explicit API URL before starting Expo:
+
+```env
+EXPO_PUBLIC_API_BASE_URL=https://YOUR_MAC_IP:8443
+```
+
+If the iPad still rejects the local HTTPS certificate, point `EXPO_PUBLIC_API_BASE_URL` at a trusted HTTPS tunnel instead of the LAN URL. Expo automatically inlines `EXPO_PUBLIC_*` variables during `npx expo start`, so reloading Expo Go will pick up the new API target.
+
 ## Demo overview by requirement
 
 To get a gist of the app, you may want to look at requirements 5 and 6 before 3 and 4. 
